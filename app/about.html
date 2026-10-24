@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>About Plymentor</title>
+    <link rel="icon" href="/assets/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/css/app.css" />
+    <style>
+      body { overflow: auto; }
+      main { min-height: 100%; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 28px 24px; text-align: center; }
+      .app-icon { width: 84px; height: 84px; }
+      h1 { margin: 6px 0 0; font-size: 30px; color: var(--strong); letter-spacing: 0.01em; }
+      .version { color: var(--muted); font-size: 13px; }
+      .tagline { max-width: 400px; margin: 6px 0 0; }
+      .made-by { margin-top: 22px; font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }
+      .studio { width: 230px; margin-top: 4px; }
+      .links { margin-top: 12px; font-size: 13px; }
+      .fine { max-width: 440px; margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img class="app-icon" src="/assets/icon.svg" alt="" />
+      <h1>Plymentor</h1>
+      <div class="version">Version {{version}}</div>
+      <p class="tagline">Your chess coach, on your computer: Stockfish, your own games, and an AI coach that remembers you.</p>
+      <div class="made-by">made by</div>
+      <img class="studio" src="/assets/brand/studio-nox.png" alt="Studio Nox" />
+      <div class="links"><a href="/licenses">Licences</a> · <a href="https://github.com/zomBeeone/plymentor">Source code</a></div>
+      <p class="fine">© 2026 Studio Nox. Plymentor is free software under the GNU Affero General Public License, version 3 or later, and comes with absolutely no warranty — see the <a href="/licenses">licences</a> and <a href="/LICENSE.txt" target="_blank">the licence's text</a>. Built on lichess open source (board, pieces, chess logic, opening names) and Stockfish.</p>
+    </main>
+  </body>
+</html>

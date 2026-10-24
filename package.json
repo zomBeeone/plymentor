@@ -1,0 +1,129 @@
+{
+  "name": "plymentor",
+  "productName": "Plymentor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Plymentor by Studio Nox: chess training desktop app with an AI coach (Claude Code, Codex or Antigravity CLI with your own subscription), Stockfish, your games and the coach's voice, all on your computer",
+  "author": "Studio Nox",
+  "homepage": "https://github.com/zomBeeone/plymentor",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zomBeeone/plymentor.git"
+  },
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "main": "build/desktop/main.mjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/build.mjs && electron .",
+    "dist": "node scripts/build.mjs && electron-builder --win nsis --x64 --publish never",
+    "dist:portable": "node scripts/build.mjs && electron-builder --win portable --x64 --publish never",
+    "release:sign": "node scripts/sign-release.mjs",
+    "site": "node scripts/site.mjs",
+    "site:screenshot": "node scripts/site-screenshot.mjs",
+    "test": "node --test \"test/unit/*.test.mjs\"",
+    "test:e2e": "node test/e2e/run.mjs",
+    "vendor": "node scripts/vendor.mjs"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
+  },
+  "devDependencies": {
+    "@lichess-org/chessground": "^10.4.2",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build2",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/headless": "^6.0.0",
+    "@xterm/xterm": "^6.0.0",
+    "chessops": "^0.15.1",
+    "electron": "44.9.3",
+    "electron-builder": "26.15.3",
+    "electron-updater": "6.8.10",
+    "esbuild": "^0.28.2",
+    "htm": "^3.1.1",
+    "kokoro-js": "1.2.1",
+    "marked": "^18.0.14",
+    "preact": "^11.0.0",
+    "sharp": "^0.34.5",
+    "stockfish": "19.0.0",
+    "ws": "^8.22.0"
+  },
+  "build": {
+    "appId": "com.studionox.plymentor",
+    "productName": "Plymentor",
+    "executableName": "Plymentor",
+    "npmRebuild": false,
+    "electronFuses": {
+      "runAsNode": true,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    },
+    "copyright": "© 2026 Studio Nox. AGPL-3.0-or-later",
+    "directories": {
+      "output": "release",
+      "buildResources": "build/resources"
+    },
+    "files": [
+      "build/app/**/*",
+      "build/desktop/**/*",
+      "!build/**/*.map",
+      "package.json",
+      "LICENSE",
+      "!node_modules/node-pty/{src,deps,third_party,scripts,typings}/**",
+      "!node_modules/node-pty/prebuilds/{darwin-arm64,darwin-x64,win32-arm64}/**",
+      "!node_modules/node-pty/lib/**/*.{test.js,map}",
+      "!node_modules/node-pty/binding.gyp",
+      "!**/*.pdb"
+    ],
+    "asarUnpack": [
+      "node_modules/node-pty/**",
+      "build/desktop/mcp.cjs",
+      "build/app/voice/**",
+      "build/app/engine/**",
+      "build/app/js/sqlite3.wasm"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "zomBeeone",
+        "repo": "plymentor",
+        "releaseType": "release"
+      }
+    ],
+    "electronLanguages": [
+      "en-US"
+    ],
+    "extraFiles": [
+      {
+        "from": "LICENSE",
+        "to": "LICENSE.txt"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/resources/icon.png"
+    },
+    "portable": {
+      "artifactName": "Plymentor-${version}-portable.exe",
+      "unpackDirName": true,
+      "splashImage": "build/resources/splash.bmp"
+    },
+    "nsis": {
+      "artifactName": "Plymentor-${version}-setup.exe",
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "Plymentor",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

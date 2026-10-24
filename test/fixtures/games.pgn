@@ -1,0 +1,75 @@
+[Event "Rated Blitz game"]
+[Site "https://lichess.org/abcd1234"]
+[Date "2026.09.01"]
+[UTCDate "2026.09.01"]
+[White "student1"]
+[Black "opp1"]
+[Result "1-0"]
+[WhiteElo "1500"]
+[BlackElo "1480"]
+[TimeControl "180+2"]
+[Termination "Normal"]
+
+1. e4 { [%clk 0:03:00] } 1... e5 { [%clk 0:03:00] } 2. Bc4 { [%clk 0:02:58] } 2... Nc6 { [%clk 0:02:57] } 3. Qh5 { [%clk 0:02:55] } 3... Nf6 { [%clk 0:02:50] } 4. Qxf7# { [%clk 0:02:53] } 1-0
+
+[Event "Endgame study"]
+[White "student1"]
+[Black "Engine"]
+[Result "*"]
+[SetUp "1"]
+[FEN "8/8/8/4k3/8/8/4P3/4K3 b - - 0 50"]
+
+50... Kd4 51. Kd2 Ke4 52. Ke1 Kd4 *
+
+[Event "Crazy"]
+[Variant "Crazyhouse"]
+[White "a"]
+[Black "b"]
+[Result "1-0"]
+
+1. e4 e5 1-0
+
+[Event "Club"]
+[White "O\"Brien, Pat"]
+[Black "Back\\slash"]
+[Result "0-1"]
+
+1. d4 d5 2. c4 e6 3. Nc3 Nf6 0-1
+
+[Event "Rated Blitz game"]
+[Site "https://lichess.org/abcd1234"]
+[Date "2026.09.01"]
+[UTCDate "2026.09.01"]
+[White "student1"]
+[Black "opp1"]
+[Result "1-0"]
+[WhiteElo "1500"]
+[BlackElo "1480"]
+[TimeControl "180+2"]
+[Termination "Normal"]
+
+1. e4 { [%clk 0:03:00] } 1... e5 { [%clk 0:03:00] } 2. Bc4 { [%clk 0:02:58] } 2... Nc6 { [%clk 0:02:57] } 3. Qh5 { [%clk 0:02:55] } 3... Nf6 { [%clk 0:02:50] } 4. Qxf7# { [%clk 0:02:53] } 1-0
+
+[Event "Broken"]
+[White "x"]
+[Black "y"]
+[Result "*"]
+[SetUp "1"]
+[FEN "this is not a fen"]
+
+1. e4 *
+
+[Event "Casual"]
+[Date "2026.08.15"]
+[White "opp2"]
+[Black "student1"]
+[Result "0-1"]
+
+1. e4 c5 { Sicilian } 2. Nf3 (2. c3 d5) 2... d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6 { Najdorf } 6. Be3 e5 7. Nb3 Be6 0-1
+
+[Event "Empty"]
+[White "p"]
+[Black "q"]
+[Result "*"]
+
+*

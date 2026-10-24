@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plymentor — Licences and source code</title>
+    <link rel="icon" href="/assets/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/css/app.css" />
+    <style>
+      body { overflow: auto; }
+      main { max-width: 860px; margin: 0 auto; padding: 28px 18px 60px; }
+      table { border-collapse: collapse; width: 100%; margin: 8px 0 22px; font-size: 13px; }
+      th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+      th { color: var(--strong); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p><a href="/about">← About Plymentor</a></p>
+      <h1>Licences and source code</h1>
+      <p>Plymentor — copyright © 2026 Studio Nox — is free software: you can redistribute it and/or modify it under the
+        terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of
+        the License, or (at your option) any later version.</p>
+      <p>Plymentor is distributed in the hope that it will be useful, but <b>without any warranty</b>; without even the
+        implied warranty of merchantability or fitness for a particular purpose. See the GNU Affero General Public License
+        for more details: <a href="/LICENSE.txt" target="_blank">the licence's full text</a> (also
+        <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank">on gnu.org</a>).</p>
+      <p>The complete source code of every version, with the tools to build it, is at
+        <a href="https://github.com/zomBeeone/plymentor" target="_blank">github.com/zomBeeone/plymentor</a> (each release
+        is built from the tag of its version).</p>
+
+      <h2>Built on</h2>
+      <p>Everything Plymentor ships is free software or free content, under licences that allow using, changing and
+        distributing it — also commercially — together with the AGPL.</p>
+      <table>
+        <tr><th>Part</th><th>Authors</th><th>Licence</th></tr>
+        <tr><td>Board (chessground), chess logic (chessops)</td><td>the lichess authors, Niklas Fiekas</td><td>GPL-3.0-or-later</td></tr>
+        <tr><td>Accuracy, win-chance, judgement and game-phase formulas (ported from lila / scalachess)</td><td>the lichess authors</td><td>AGPL-3.0-or-later</td></tr>
+        <tr><td>Opening names (lichess-org/chess-openings)</td><td>the lichess authors and contributors</td><td>CC0 1.0</td></tr>
+        <tr><td>Stockfish 19 (stockfish.js WebAssembly build, with its neural network)</td><td>the Stockfish developers; Nathan Rugg / Chess.com</td><td>GPL-3.0 (<a href="/engine/COPYING.txt">licence</a>, <a href="https://github.com/nmrugg/stockfish.js" target="_blank">source</a>)</td></tr>
+        <tr><td>SQLite (WebAssembly build)</td><td>the SQLite developers</td><td>public domain; wrapper Apache-2.0</td></tr>
+        <tr><td>Kokoro-82M voice model (downloaded once, when you turn the natural voice on)</td><td>hexgrad</td><td>Apache-2.0</td></tr>
+        <tr><td>kokoro-js, Transformers.js</td><td>hexgrad, Xenova / Hugging Face</td><td>Apache-2.0</td></tr>
+        <tr><td>phonemizer (eSpeak NG)</td><td>Xenova, the eSpeak NG authors</td><td>GPL-3.0</td></tr>
+        <tr><td>ONNX Runtime Web</td><td>Microsoft</td><td>MIT</td></tr>
+        <tr><td>Preact, htm</td><td>Jason Miller and contributors</td><td>MIT, Apache-2.0</td></tr>
+        <tr><td>marked</td><td>Christopher Jeffrey and contributors</td><td>MIT</td></tr>
+        <tr><td>xterm.js, node-pty, ws</td><td>the xterm.js authors, Microsoft, the ws authors</td><td>MIT</td></tr>
+        <tr><td>Electron (the desktop app: Chromium, Node.js)</td><td>the Electron, Chromium and Node.js authors</td><td>MIT, BSD-3-Clause and others (LICENSES.chromium.html next to the program)</td></tr>
+        <tr><td>Updates: electron-updater, builder-util-runtime (and fs-extra, graceful-fs, js-yaml, semver, sax, debug, lazy-val, lodash.isequal, lodash.escaperegexp)</td><td>Vladimir Krivosheev and the electron-builder authors; their authors</td><td>MIT; graceful-fs, semver: ISC; sax: BlueOak-1.0.0</td></tr>
+        <tr><td>The 7z unpacking (an LZMA / LZMA2 decoder written after the LZMA SDK)</td><td>Igor Pavlov (LZMA SDK)</td><td>public domain</td></tr>
+        <tr><td>The Scid 5 database format (read by Plymentor's own code, after Scid's codec_scid5.h and bytebuf.h, and its game.cpp and position.cpp)</td><td>Fulvio Benini; Shane Hudson and the Scid authors</td><td>MIT (codec_scid5.h, bytebuf.h); Scid: GNU GPL with no version named, so any version — here GPL-3.0</td></tr>
+        <tr><td>Plymentor's knight icon</td><td>Studio Nox</td><td>AGPL-3.0-or-later (part of Plymentor)</td></tr>
+      </table>
+
+      <h2>Pieces, boards and sounds (from lila)</h2>
+      <table>
+        <tr><th>Files</th><th>Authors</th><th>Licence</th></tr>
+        <tr><td>Board textures, sounds (the "sfx" set), piece sets kosal and pirouetti</td><td>the lichess authors and contributors, Enigmahack, pirouetti</td><td>AGPL-3.0-or-later</td></tr>
+        <tr><td>Pieces: cburnett, merida</td><td>Colin M.L. Burnett; Armando Hernandez Marroquin</td><td>GPL-2.0-or-later</td></tr>
+        <tr><td>Pieces: mpchess</td><td>Maxime Chupin</td><td>GPL-3.0-or-later</td></tr>
+        <tr><td>Pieces: chessnut</td><td>Alexis Luengas</td><td>Apache-2.0</td></tr>
+        <tr><td>Pieces: fantasy</td><td>Maurizio Monge</td><td>MIT</td></tr>
+      </table>
+
+      <h2>The Studio Nox name and logo</h2>
+      <p>The Studio Nox name and logo are trademarks of Studio Nox and are not licensed under the AGPL (as its section 7
+        allows). A version you change and pass on should leave them out — they are only in <code>branding/</code> of the
+        source and are easy to replace.</p>
+
+      <h2>Coaches</h2>
+      <p>Claude Code (Anthropic), Codex CLI (OpenAI) and Antigravity CLI (Google) are not part of Plymentor. Plymentor
+        installs them with their makers' official installers when you ask, and starts the copy installed on your computer,
+        under its own licence and terms, with your own account. Game databases you add are not part of Plymentor either:
+        they stay under the terms of whoever made them.</p>
+    </main>
+  </body>
+</html>

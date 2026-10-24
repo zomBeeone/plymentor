@@ -1,0 +1,12 @@
+node_modules/
+*.log
+build/
+release/
+test/.tmp/
+*.pem
+# the documentation stays on the release computer, not on GitHub (README.md is the short public one)
+CLAUDE.md
+SPEC.md
+CHANGELOG.md
+SECURITY.md
+README-full.md

@@ -1,0 +1,59 @@
+/* Board themes and square states, after lila/ui/lib/css/theme/board. Piece images are injected by js/board-theme.js. */
+
+cg-board {
+  background-size: cover;
+  border-radius: 3px;
+  box-shadow: 0 3px 14px rgb(0 0 0 / 0.45);
+}
+
+body[data-board='brown'] cg-board { background-image: url(/assets/board/brown.png); --ccw: #f0d9b5; --ccb: #946f51; }
+body[data-board='blue'] cg-board { background-image: url(/assets/board/blue.png); --ccw: #dee3e6; --ccb: #788a94; }
+body[data-board='green'] cg-board { background-image: url(/assets/board/green.png); --ccw: #ffffdd; --ccb: #6d8753; }
+body[data-board='ic'] cg-board { background-image: url(/assets/board/ic.png); --ccw: #ececec; --ccb: #c1c18e; }
+body[data-board='purple'] cg-board { background-image: url(/assets/board/purple.png); --ccw: #9f90b0; --ccb: #7d4a8d; }
+body[data-board='wood4'] cg-board { background-image: url(/assets/board/wood4.jpg); --ccw: #caaf7d; --ccb: #7b5330; }
+body[data-board='wood'] cg-board { background-image: url(/assets/board/wood.jpg); --ccw: #d8a45b; --ccb: #9b4d0f; }
+body[data-board='maple'] cg-board { background-image: url(/assets/board/maple.jpg); --ccw: #e8ceab; --ccb: #bc7944; }
+body[data-board='blue3'] cg-board { background-image: url(/assets/board/blue3.jpg); --ccw: #d9e0e6; --ccb: #315991; }
+body[data-board='marble'] cg-board { background-image: url(/assets/board/marble.jpg); --ccw: #93ab91; --ccb: #4f644e; }
+body[data-board='olive'] cg-board { background-image: url(/assets/board/olive.jpg); --ccw: #b8b19f; --ccb: #6d6655; }
+body[data-board='grey'] cg-board { background-image: url(/assets/board/grey.jpg); --ccw: #b8b8b8; --ccb: #7d7d7d; }
+body[data-board='leather'] cg-board { background-image: url(/assets/board/leather.jpg); --ccw: #d1d1c9; --ccb: #c28e16; }
+body[data-board='blue-marble'] cg-board { background-image: url(/assets/board/blue-marble.jpg); --ccw: #eae6dd; --ccb: #7c7f87; }
+body[data-board='canvas'] cg-board { background-image: url(/assets/board/canvas2.jpg); --ccw: #d7daeb; --ccb: #547388; }
+body[data-board='green-plastic'] cg-board { background-image: url(/assets/board/green-plastic.png); --ccw: #f2f9bb; --ccb: #59935d; }
+body[data-board='pink'] cg-board { background-image: url(/assets/board/pink-pyramid.png); --ccw: #e8e9b7; --ccb: #ed7272; }
+body[data-board='metal'] cg-board { background-image: url(/assets/board/metal.jpg); --ccw: #c9c9c9; --ccb: #727272; }
+
+cg-board square.move-dest { background: radial-gradient(rgb(20 85 30 / 0.5) 19%, rgb(0 0 0 / 0) 20%); }
+cg-board square.oc.move-dest { background: radial-gradient(transparent 0%, transparent 79%, rgb(20 85 0 / 0.3) 80%); }
+cg-board square.last-move { background-color: rgb(155 199 0 / 0.41); }
+body[data-board='green'] cg-board square.last-move,
+body[data-board='green-plastic'] cg-board square.last-move,
+body[data-board='marble'] cg-board square.last-move { background-color: rgb(0 155 199 / 0.41); }
+cg-board square.selected { background-color: rgb(20 85 30 / 0.5); }
+cg-board square.check {
+  background: radial-gradient(ellipse at center, rgb(255 0 0) 0%, rgb(231 0 0) 25%, rgb(169 0 0 / 0) 89%, rgb(158 0 0 / 0) 100%);
+}
+cg-board square.current-premove { background-color: rgb(20 30 85 / 0.5) !important; }
+cg-board square.hl-yellow { background-color: rgb(255 200 0 / 0.45); }
+cg-board square.hl-red { background-color: rgb(230 40 40 / 0.4); }
+cg-board square.hl-green { background-color: rgb(40 180 60 / 0.4); }
+@media (hover: hover) {
+  cg-board square.move-dest:hover { background: rgb(20 85 30 / 0.3); }
+}
+
+/* coordinates inside the board, coloured per theme like lichess */
+.cg-wrap coords { font-size: clamp(8px, 1.3vmin, 11px); font-weight: 700; opacity: 1; text-shadow: none; }
+.cg-wrap coords .coord-light { color: var(--ccb, #946f51); }
+.cg-wrap coords .coord-dark { color: var(--ccw, #f0d9b5); }
+.cg-wrap coords.ranks { left: 2px; top: 0; height: 100%; width: auto; flex-flow: column-reverse; }
+.cg-wrap coords.ranks.black { flex-flow: column; }
+.cg-wrap coords.ranks coord { transform: none; padding-top: 2px; flex: 1 1 0; }
+.cg-wrap coords.files { left: 0; bottom: 0; height: auto; width: 100%; flex-flow: row; text-transform: lowercase; }
+.cg-wrap coords.files.black { flex-flow: row-reverse; }
+.cg-wrap coords.files coord { flex: 1 1 0; text-align: right; padding-right: 3px; padding-bottom: 1px; }
+.no-coords .cg-wrap coords { display: none; }
+
+/* move judgement glyph badges drawn on the destination square */
+.glyph-badge { font: 700 11px system-ui, sans-serif; }
