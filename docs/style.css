@@ -41,6 +41,7 @@ h1 { margin: 0 0 20px; font-size: clamp(36px, 6.2vw, 62px); line-height: 1.07; l
 .meta a { color: var(--text); }
 
 .shot { margin-top: 28px; margin-bottom: 0; }
+.shot-more { margin-top: 0; margin-bottom: 88px; }
 .shot img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55); }
 figcaption { margin-top: 14px; color: var(--muted); font-size: 14px; text-align: center; }
 
