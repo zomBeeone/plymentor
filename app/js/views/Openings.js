@@ -5,7 +5,7 @@ import { get, post, qs } from '../api.js';
 import { toast, useStore } from '../store.js';
 import { BoardCtrl, useCtrl, useBoardKeys, useForce, useMedia } from '../ctrl.js';
 import { Tree, placeCoachPosition } from '../tree.js';
-import { engine, useLiveEval } from '../engine.js';
+import { engine, useLiveEval, engineSwitches, setEngineSwitch, useEngineSwitch } from '../engine.js';
 import { Board } from '../components/Board.js';
 import { EvalBar } from '../components/EvalBar.js';
 import { EnginePanel } from '../components/EnginePanel.js';
@@ -25,7 +25,6 @@ const os = {
   entries: { white: null, black: null },
   side: stored('openings.side', 'repertoire'), // next to the board: the repertoire or the coach
   compactTab: stored('openings.side', 'repertoire'), // a narrow window's one column: coach, repertoire, moves or explorer
-  engineOn: stored('openings.engine', true),
   multipv: stored('openings.multipv', 3),
   drill: null,
   query: '',
@@ -78,7 +77,8 @@ export function Openings({ route }) {
   const [importOpen, setImportOpen] = useState(false);
   const color = os.repColor;
   const d = os.drill;
-  const engineOn = os.engineOn && !d; // a drill is a test: no engine
+  const switchOn = useEngineSwitch('openings');
+  const engineOn = switchOn && !d; // a drill is a test: no engine
   const live = useLiveEval(engineOn ? node.fen : '__off__');
 
   const setSide = id => {
@@ -89,11 +89,7 @@ export function Openings({ route }) {
     }
     rerender();
   };
-  const toggleEngine = () => {
-    os.engineOn = !os.engineOn;
-    store('openings.engine', os.engineOn);
-    rerender();
-  };
+  const toggleEngine = () => setEngineSwitch('openings', !engineSwitches().openings);
 
   useEffect(() => {
     if (!os.entries.white) loadRep('white').then(rerender);
@@ -138,7 +134,7 @@ export function Openings({ route }) {
       startFen: ctrl.tree.isStandardStart ? undefined : ctrl.tree.startFen,
       ucis: ctrl.tree.ucis(at),
       drill: os.drill ? { color: os.drill.color } : undefined,
-      engine: !os.drill && os.engineOn && ev?.lines?.length ? { depth: ev.depth, lines: ev.lines.map(l => ({ score: l.score, pv: (l.pv || []).slice(0, 12) })) } : undefined,
+      engine: !os.drill && engineSwitches().openings && ev?.lines?.length ? { depth: ev.depth, lines: ev.lines.map(l => ({ score: l.score, pv: (l.pv || []).slice(0, 12) })) } : undefined,
       question: os.question && repKey(os.question.fen) === repKey(at.fen) ? true : undefined,
       note: os.drill ? undefined : `The ${os.repColor} repertoire is selected; next to the board: ${os.side === 'coach' ? 'your coach panel' : 'the repertoire'}.`,
     };
@@ -341,7 +337,7 @@ export function Openings({ route }) {
   const enginePanel = html`<div class="panel" style="flex:none"><${EnginePanel}
     fen=${node.fen}
     data=${live}
-    enabled=${os.engineOn}
+    enabled=${switchOn}
     onToggle=${toggleEngine}
     multipv=${os.multipv}
     onMultipv=${n => {

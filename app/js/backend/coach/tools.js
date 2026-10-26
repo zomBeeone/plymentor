@@ -14,7 +14,8 @@ import { jobs } from '../analysis/batch.js';
 import { lichessExplorer } from '../online.js';
 import { formatScore } from '../chess/evalmath.js';
 import { addLineToRepertoire, removeFromRepertoire, repertoire, repertoireLines, repertoireStats } from '../training.js';
-import { describeAppState } from './state.js';
+import { createReport } from '../reports.js';
+import { describeAppState, ENGINE_SCREENS } from './state.js';
 import { toolDef, validate, HOST_TOOLS, SCREENS } from '../../../../shared/tools.js';
 
 export class ToolError extends Error {}
@@ -31,6 +32,14 @@ function safePos(fen) {
 }
 
 const duration = s => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
+
+/** The coach's written report (save_report, create_report), checked. */
+function reportText(markdown) {
+  const text = markdown.trim();
+  if (!text) throw new ToolError('The report text is empty.');
+  if (text.length > 150_000) throw new ToolError('The report is too long (more than 150,000 characters).');
+  return text;
+}
 
 /**
  * The line on the student's board (the moves from the initial position, as the window reports them) when the position
@@ -366,6 +375,24 @@ const executors = {
     return `Switched the app to the ${s.label} screen${t ? ` (${t} tab)` : ''}.${seen ? '' : ' Your panel is not shown there: the student reads your messages again on the Board, Openings (coach tab), Reports or Train screen — switch back when you are done there.'}`;
   },
 
+  async set_engine({ on, screen }, ctx) {
+    const view = ctx.screen?.view;
+    const here = ENGINE_SCREENS[view];
+    const screens = screen === 'both' || (!screen && !here) ? ['board', 'openings'] : [screen || here];
+    ctx.emit({ type: 'ui', action: 'set_engine', screens, on });
+    const state = on ? 'on' : 'off';
+    const where = `the ${screens.map(s => SCREENS[s].label).join(' and ')} screen${screens.length > 1 ? 's' : ''}`;
+    const before = ctx.screen?.engines;
+    const L = [
+      before && screens.every(s => before[s] === on)
+        ? `The student's live Stockfish analysis on ${where} was already ${state}.`
+        : `Switched ${state} the student's live Stockfish analysis on ${where}: ${on ? 'they see its evaluation bar, engine lines and best-move arrow there' : 'they see no evaluation bar, engine lines or best-move arrow there; your own Stockfish tools work as always'}.`,
+    ];
+    if (on && screens.includes(here) && view === 'play') L.push('It stays hidden while their training game is on the board, and shows when they leave the game.');
+    if (on && screens.includes(here) && view === 'drill') L.push('It stays hidden during the repertoire drill they are doing.');
+    return L.join(' ');
+  },
+
   async create_exercise({ fen, solution, prompt, themes = [], game_id, ply }, ctx) {
     const pos = safePos(fen);
     const r = playLine(fenOf(pos), solution);
@@ -446,9 +473,34 @@ const executors = {
     return `Opened on the analysis board: ${gameSummary(g)}, ${at ? `after ply ${at} (${g.sans[at - 1]})` : 'at the start'}.`;
   },
 
+  async create_report({ game_ids, title, markdown }, ctx) {
+    const names = myNames();
+    if (!names.length) throw new ToolError('The student has not set their usernames in Settings, so their side in each game is unknown and no report can be made. Ask them to add their usernames.');
+    const narrative = markdown === undefined ? null : reportText(markdown);
+    const gameIds = game_ids && [...new Set(game_ids)];
+    const r = createReport({ names, gameIds, title: title?.replace(/\s+/g, ' ').trim(), display: getSettings().profile.usernames?.[0] || names[0], narrative });
+    if (!r.id) {
+      if (!gameIds) throw new ToolError('No analysed games of the student yet: analyse their games with analyze_games first (or they can, on the Games screen).');
+      const { notAnalyzed, skipped } = r.stats;
+      const missing = gameIds.length - notAnalyzed - skipped;
+      throw new ToolError(
+        `None of these games can go into a report: ${[notAnalyzed && `${notAnalyzed} not analysed yet (analyse them with analyze_games first)`, skipped && `${skipped} not played by the student`, missing && `${missing} not found`].filter(Boolean).join(', ')}.`,
+      );
+    }
+    ctx.emit({ type: 'ui', action: 'report_created', id: r.id, title: r.title });
+    const n = r.stats.games;
+    return [
+      `Added report #${r.id} "${r.title}" to the Reports screen: statistics over ${n} analysed game${n === 1 ? '' : 's'} of the student${narrative ? `, with your written report (${narrative.length} characters)` : ''}.`,
+      describeStats(r.stats, { moments: 20 }),
+      narrative ? '' : `\nSave your written report to it with save_report (report_id ${r.id}).`,
+    ]
+      .join('\n')
+      .trim();
+  },
+
   async get_report({ report_id }) {
     const r = report_id ? get('SELECT * FROM reports WHERE id = ?', report_id) : get('SELECT * FROM reports ORDER BY id DESC LIMIT 1');
-    if (!r) throw new ToolError(report_id ? `No report #${report_id}.` : 'There are no reports yet. The student can create one on the Reports screen once some of their games are analysed.');
+    if (!r) throw new ToolError(report_id ? `No report #${report_id}.` : "There are no reports yet: add one with create_report (statistics over the student's analysed games).");
     const stats = json(r.stats);
     return [
       `Report #${r.id}: "${r.title}" — player ${r.player}, ${stats?.games ?? 0} analysed games.`,
@@ -460,9 +512,7 @@ const executors = {
   async save_report({ report_id, markdown }, ctx) {
     const r = get('SELECT id, title FROM reports WHERE id = ?', report_id);
     if (!r) throw new ToolError(`No report #${report_id}.`);
-    const text = markdown.trim();
-    if (!text) throw new ToolError('The report text is empty.');
-    if (text.length > 150_000) throw new ToolError('The report is too long (more than 150,000 characters).');
+    const text = reportText(markdown);
     run('UPDATE reports SET narrative = ?, updated_at = ? WHERE id = ?', text, now(), r.id);
     ctx.emit({ type: 'ui', action: 'report_saved', id: r.id });
     return `Saved your report to "${r.title}" on the Reports screen (${text.length} characters).`;

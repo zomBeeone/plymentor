@@ -10,7 +10,7 @@ import { lookup, bookMoves, search as searchOpenings, openingCount } from './che
 import { posFromFen, keyOf, INITIAL_FEN, ChessError } from './chess/core.js';
 import { describePosition } from './chess/features.js';
 import { jobs } from './analysis/batch.js';
-import { playerStats } from './analysis/stats.js';
+import { createReport } from './reports.js';
 import { executeTool } from './coach/tools.js';
 import { importLegacy } from './legacy.js';
 import {
@@ -192,22 +192,9 @@ route('POST', '/api/reports', ({ body }) => {
         .filter(Boolean)
     : myNames();
   if (!names.length) throw new HttpError(400, 'Set your usernames in Settings (or choose a player) so the report knows which side you played.');
-  let list = ids(b.gameIds);
-  if (!list.length) list = allGameIds({ player: names.join(','), analyzed: '1' });
-  const stats = playerStats({ names, gameIds: list });
-  if (!stats.games) throw new HttpError(400, 'None of these games are analysed games of this player yet. Analyse them first.');
-  list = stats.gameList.map(g => g.id);
   const display = b.player ? names[0] : getSettings().profile.usernames?.[0] || names[0];
-  const title = String(b.title || `${display} — ${stats.games} games`).slice(0, 200);
-  const id = run(
-    'INSERT INTO reports (title, player, game_ids, stats, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    title,
-    names.join(', '),
-    JSON.stringify(list),
-    JSON.stringify(stats),
-    now(),
-    now(),
-  ).id;
+  const { id } = createReport({ names, gameIds: ids(b.gameIds), title: b.title, display });
+  if (!id) throw new HttpError(400, 'None of these games are analysed games of this player yet. Analyse them first.');
   return reportRow(get('SELECT * FROM reports WHERE id = ?', id), true);
 });
 

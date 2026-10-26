@@ -29,6 +29,16 @@ export function Reports({ route }) {
     if (!route.id && list?.length) navigate(`#/reports/${list[0].id}`);
   }, [list, route.id]);
 
+  // The coach adds reports (create_report) and writes them (save_report): a new one opens, and the list follows.
+  useEffect(() => {
+    const onCoachUi = e => {
+      if (e.detail.action === 'report_created') navigate(`#/reports/${e.detail.id}`);
+      else if (e.detail.action === 'report_saved') loadList();
+    };
+    window.addEventListener('cc:coach-ui', onCoachUi);
+    return () => window.removeEventListener('cc:coach-ui', onCoachUi);
+  }, []);
+
   const createAll = async () => {
     setCreating(true);
     try {
@@ -56,7 +66,7 @@ export function Reports({ route }) {
       ${list && !list.length && html`<div class="muted" style="font-size:13px;padding:6px">No reports yet.</div>`}
     </div>
     <div class="detail">
-      ${route.id ? html`<${ReportDetail} key=${route.id} id=${route.id} onDeleted=${() => (loadList(), navigate('#/reports'))} onChanged=${loadList} />` : html`<${ReportsIntro} settings=${s.settings} />`}
+      ${route.id ? html`<${ReportDetail} key=${route.id} id=${route.id} onDeleted=${() => (loadList(), navigate('#/reports'))} />` : html`<${ReportsIntro} settings=${s.settings} />`}
     </div>
   </div>`;
 }
@@ -70,13 +80,13 @@ function ReportsIntro({ settings }) {
       <ol>
         <li>${names.length ? html`Your usernames: <b>${names.join(', ')}</b>.` : html`Add your usernames in <a href="#/settings">Settings</a> so the app knows which side you played.`}</li>
         <li>Import games on the <a href="#/games">Games</a> page (files, Lichess or Chess.com) and analyse them with Stockfish.</li>
-        <li>Create a report: you get statistics right away, and the coach writes a personal report with examples from your own games, the concepts to study, and a training plan.</li>
+        <li>Create a report — or ask your coach for one, e.g. on your last 20 games or one opening: you get statistics right away, and the coach writes a personal report with examples from your own games, the concepts to study, and a training plan.</li>
       </ol>
     </div>
   </div>`;
 }
 
-function ReportDetail({ id, onDeleted, onChanged }) {
+function ReportDetail({ id, onDeleted }) {
   const [r, setR] = useState(null);
   const [making, setMaking] = useState(false);
   const [writing, setWriting] = useState(false);
@@ -96,7 +106,6 @@ function ReportDetail({ id, onDeleted, onChanged }) {
       if (e.detail.action === 'report_saved' && String(e.detail.id) === String(id)) {
         setWriting(false);
         load();
-        onChanged?.();
         toast('Your coach saved the report.', 'success');
       }
     };

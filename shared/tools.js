@@ -27,7 +27,7 @@ export const TOOL_DEFS = [
     name: 'get_board_state',
     readOnly: true,
     description:
-      "What the student sees in the app right now: the active screen, the loaded game, the moves played, the current position (FEN, ASCII board, pieces), the live Stockfish lines and the judgement of the last move. Call it before talking about \"this position\" or \"my move\" — the student may have moved since you last looked.",
+      "What the student sees in the app right now: the active screen, the loaded game, the moves played, the current position (FEN, ASCII board, pieces), whether their live Stockfish analysis is on (with its lines when it is) and the judgement of the last move. Call it before talking about \"this position\" or \"my move\" — the student may have moved since you last looked.",
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -250,6 +250,20 @@ export const TOOL_DEFS = [
     },
   },
   {
+    name: 'set_engine',
+    description:
+      "Switch the student's live Stockfish analysis on or off: the evaluation bar, the engine lines and the best-move arrow they see on the Board and on the Openings screen (each screen has its own switch; get_board_state says whether it is on). Without screen: the screen the student is on — on a screen without live analysis, both. Its lines and arrow give the best move away: when you ask the student to find a move (set_board with ask_move, a quiz) while it is on, switch it off first and back on once they have answered. Switch it when they ask, too. It only changes what the student sees: your own Stockfish tools always work.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        on: { type: 'boolean', description: 'true switches it on, false off.' },
+        screen: { type: 'string', enum: ['board', 'openings', 'both'], description: "Which switch: the Board screen's, the Openings screen's or both (default: the screen the student is on)." },
+      },
+      required: ['on'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'create_exercise',
     description:
       'Save a "find the best move" exercise to the student\'s training deck (spaced repetition). Use positions from their own games where they went wrong, with the engine\'s best move as the solution. Verify the solution with evaluate_move or analyze_position first.',
@@ -322,6 +336,20 @@ export const TOOL_DEFS = [
     },
   },
   {
+    name: 'create_report',
+    description:
+      "Add a new report to the Reports screen, where the student can read it any time: the statistics over the student's analysed games — results, accuracy, phases, tactical awareness, conversion, clock use, openings, error patterns and their costliest moments — over all of them, or over the games you choose (e.g. their last 20, one opening or one time control; analyse games that are not analysed yet with analyze_games first). Give it a title that says what it covers, and your written report as markdown (as in save_report) — or save that later with save_report. Returns the report's id and its statistics; the Reports screen shows the new report (switch_screen takes the student there).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        game_ids: { type: 'array', items: { type: 'integer' }, minItems: 1, maxItems: 1000, description: "The games it covers (ids from search_games); only the student's analysed games count. Default: all of them." },
+        title: { type: 'string', description: 'Its title on the Reports screen, e.g. "My last 20 blitz games" (default: the username and the number of games).' },
+        markdown: { type: 'string', description: 'Your written report (Markdown, as in save_report), when it is ready.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'get_report',
     readOnly: true,
     description:
@@ -331,7 +359,7 @@ export const TOOL_DEFS = [
   {
     name: 'save_report',
     description:
-      'Save your written training report (Markdown) to a report on the Reports screen, where the student can read it any time; replaces the earlier text. There, fenced code blocks with the language `board` (lines "fen: …", optional "arrows: e2e4 g, g8f6 r", "caption: …") are drawn as boards, and [text](game:ID@PLY) links open a game at a moment.',
+      'Save your written training report (Markdown) to a report on the Reports screen — one the student made there or one you added with create_report —, where the student can read it any time; replaces the earlier text. There, fenced code blocks with the language `board` (lines "fen: …", optional "arrows: e2e4 g, g8f6 r", "caption: …") are drawn as boards, and [text](game:ID@PLY) links open a game at a moment.',
     input_schema: {
       type: 'object',
       properties: { report_id: { type: 'integer' }, markdown: { type: 'string' } },
@@ -466,6 +494,8 @@ export function toolLabel(name, input) {
       return input?.ask_move ? 'Setting up a question on the board' : 'Showing a position on the board';
     case 'switch_screen':
       return SCREENS[input?.screen] ? `Switching to the ${SCREENS[input.screen].label} screen` : 'Switching screens';
+    case 'set_engine':
+      return `Switching Stockfish ${input?.on ? 'on' : 'off'}`;
     case 'create_exercise':
       return 'Saving an exercise';
     case 'get_repertoire':
@@ -483,6 +513,8 @@ export function toolLabel(name, input) {
       return 'Looking at your board';
     case 'open_game':
       return 'Opening a game';
+    case 'create_report':
+      return 'Adding a report';
     case 'get_report':
       return 'Reading your report';
     case 'save_report':

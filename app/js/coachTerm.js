@@ -12,6 +12,7 @@ import { post } from './api.js';
 import { setState, state, toast } from './store.js';
 import { navigate, parseHash } from './router.js';
 import { coachSays, stopSpeaking } from './voice.js';
+import { engineSwitches, setEngineSwitch } from './engine.js';
 import { COACH_PROTOCOL, APP_VERSION } from '../../shared/protocol.js';
 import { CLI_TASKS } from '../../shared/prompts.js';
 import { SCREENS } from '../../shared/tools.js';
@@ -282,9 +283,9 @@ export function hostRequest(type, data = {}, { timeout = 30_000, onEvent } = {})
 // ---------------------------------------------------------------------------------------------
 // The coach's tools
 
-// The tools that change the screen run one after the other, in the order they came: a set_board right after (or
-// together with) a switch_screen goes to the new screen.
-const SCREEN_TOOLS = new Set(['switch_screen', 'set_board', 'open_game']);
+// The tools that change the screen run one after the other, in the order they came: a set_board (or set_engine) right
+// after (or together with) a switch_screen goes to the new screen.
+const SCREEN_TOOLS = new Set(['switch_screen', 'set_board', 'open_game', 'set_engine']);
 let screenTools = Promise.resolve();
 
 function runTool(m) {
@@ -298,8 +299,9 @@ async function execTool({ id, name, arguments: args }) {
   let result;
   try {
     const body = { arguments: args && typeof args === 'object' ? args : {} };
-    // what the student sees; set_board uses the line on their board to play a position out from it
-    if (name === 'get_board_state' || name === 'set_board') body.screen = currentScreen();
+    // what the student sees; set_board uses the line on their board to play a position out from it, set_engine the
+    // screen they are on
+    if (name === 'get_board_state' || name === 'set_board' || name === 'set_engine') body.screen = currentScreen();
     result = await post(`/api/agent/tools/${encodeURIComponent(String(name))}`, body);
     if (name === 'switch_screen' && !result?.isError) await screenShown(SCREENS[body.arguments.screen]?.view, body.arguments.tab);
   } catch (e) {
@@ -471,15 +473,16 @@ function screenShown(view, tab) {
 }
 
 function currentScreen() {
+  const engines = engineSwitches(); // the student's Stockfish switches
   const top = screens.at(-1)?.current;
-  if (!top) return { view: parseHash().view || 'analysis', context: null };
+  if (!top) return { view: parseHash().view || 'analysis', context: null, engines };
   let context = null;
   try {
     context = top.getContext?.() || null;
   } catch (e) {
     console.error('coach context failed', e);
   }
-  return { view: typeof top.view === 'function' ? top.view() : top.view, context };
+  return { view: typeof top.view === 'function' ? top.view() : top.view, context, engines };
 }
 
 /** UI actions of the coach's tools (pushed by the backend worker on the 'coach-ui' topic). */
@@ -487,6 +490,11 @@ export function onCoachUi(ev) {
   if (!ev || ev.type !== 'ui') return;
   if (ev.action === 'speak') return coachSays(ev);
   if (ev.action === 'exercise_created') setState(s => ({ exercisesDue: (s.exercisesDue || 0) + 1 }));
+  if (ev.action === 'report_created') toast(`Your coach added the report “${ev.title}” to the Reports screen.`, 'success', 6000);
+  if (ev.action === 'set_engine') {
+    const changed = (Array.isArray(ev.screens) ? ev.screens : []).filter(s => setEngineSwitch(s, !!ev.on));
+    if (changed.length) toast(`Your coach turned ${ev.on ? 'on' : 'off'} Stockfish on the ${changed.map(s => SCREENS[s].label).join(' and ')} screen${changed.length > 1 ? 's' : ''}.`);
+  }
   window.dispatchEvent(new CustomEvent('cc:coach-ui', { detail: ev }));
   // switch_screen: the screen takes its tab from the route (and drops it from the address once it has it)
   if (ev.action === 'switch_screen') return navigate(`#/${encodeURIComponent(ev.view)}${ev.tab ? `?tab=${encodeURIComponent(ev.tab)}` : ''}`);

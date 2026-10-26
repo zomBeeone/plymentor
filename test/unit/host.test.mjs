@@ -148,7 +148,7 @@ test('a page connects: welcome, the coach starts with the fake program, tools li
   assert.equal(welcome.settings.provider, 'claude-code');
   assert.equal(welcome.home, home);
   await waitMsg(ws, m => m.t === 'status' && m.state === 'running');
-  await waitTerm(ws, /tools: 27/);
+  await waitTerm(ws, /tools: 29/);
   const mcpJson = JSON.parse(readFileSync(join(home, 'coach-workspace', USER, 'claude-code', 'mcp.json'), 'utf8'));
   const server = mcpJson.mcpServers.plymentor;
   token = server.env.PLYMENTOR_TOKEN;
@@ -173,7 +173,7 @@ test('the coach’s tool calls go to the page; the notes stay with the host', as
   // the bridge itself, with the secret
   const auth = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
   const list = JSON.parse((await http('/agent/tools', { headers: auth })).body);
-  assert.equal(list.tools.length, 27);
+  assert.equal(list.tools.length, 29);
   const bad = JSON.parse((await http('/agent/tools/analyze_position', { method: 'POST', headers: auth, body: JSON.stringify({ arguments: { fen: 1 } }) })).body);
   assert.equal(bad.isError, true, 'invalid input never reaches the page');
   const unknown = JSON.parse((await http('/agent/tools/rm_rf', { method: 'POST', headers: auth, body: '{}' })).body);

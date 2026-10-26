@@ -5,7 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { openBackend, closeBackend, fixture, STOCKFISH } from './setup.mjs';
 import { get, all } from '../../app/js/backend/db.js';
-import { PgnImporter } from '../../app/js/backend/games.js';
+import { PgnImporter, deleteGames } from '../../app/js/backend/games.js';
 import { updateSettings } from '../../app/js/backend/settings.js';
 import { evaluate, evaluateMove, playMove, live } from '../../app/js/backend/engine/pool.js';
 import { jobs } from '../../app/js/backend/analysis/batch.js';
@@ -201,6 +201,52 @@ test('the coach’s tools run here and validate their input', { skip, timeout: 1
   assert.equal(all('SELECT * FROM exercises').length >= 1, true);
 });
 
+test('the coach adds reports to the Reports screen itself', { skip }, async () => {
+  const ui = [];
+  const t = input => executeTool('create_report', input, { emit: e => ui.push(e), screen: null });
+  // (the games are analysed by the batch test above; 3 of them are the student's)
+  const every = await t({});
+  assert.equal(every.isError, false, every.content);
+  const id = Number(/^Added report #(\d+) "student1 — 3 games" to the Reports screen: statistics over 3 analysed games of the student\.\nPlayer: student1\. Analysed games: 3\./.exec(every.content)?.[1]);
+  assert.ok(id > 0, every.content);
+  assert.match(every.content, /\nWorst moments/);
+  assert.match(every.content, new RegExp(`\\nSave your written report to it with save_report \\(report_id ${id}\\)\\.$`));
+  assert.deepEqual(ui.at(-1), { type: 'ui', action: 'report_created', id, title: 'student1 — 3 games' }, 'the Reports screen opens it');
+  const list = await handle('GET', '/api/reports');
+  assert.deepEqual([list[0].id, list[0].narrative], [id, null], 'one of the student’s reports');
+  // the games it chooses (each once), its own title, and its written report at once
+  const one = await t({ game_ids: [ids[0], ids[0]], title: '  The\nScholar’s mate ', markdown: '## Overview\nOne game.' });
+  assert.match(one.content, /^Added report #\d+ "The Scholar’s mate" to the Reports screen: statistics over 1 analysed game of the student, with your written report \(21 characters\)\.\n/);
+  assert.doesNotMatch(one.content, /save_report/);
+  const r = await handle('GET', `/api/reports/${ui.at(-1).id}`);
+  assert.deepEqual([r.title, r.gameIds, r.narrative, r.stats.games], ['The Scholar’s mate', [ids[0]], '## Overview\nOne game.', 1]);
+
+  // nothing to report on: no report is added, and the coach hears why
+  const reports = () => get('SELECT COUNT(*) n FROM reports').n;
+  const before = reports();
+  const other = get(`SELECT id FROM games WHERE white LIKE 'O%Brien%'`).id;
+  const imp = new PgnImporter({ name: 'new games', source: 'file' });
+  imp.feed('[White "student1"]\n[Black "opp3"]\n[Result "1-0"]\n\n1. d4 d5 2. c4 1-0\n');
+  const [fresh] = imp.finish().ids;
+  try {
+    const none = await t({ game_ids: [fresh, other, 99999] });
+    assert.equal(none.isError, true);
+    assert.match(none.content, /^None of these games can go into a report: 1 not analysed yet \(analyse them with analyze_games first\), 1 not played by the student, 1 not found\.$/);
+  } finally {
+    deleteGames([fresh]); // (the last test expects every game of the student analysed)
+  }
+  assert.match((await t({ markdown: '  ' })).content, /^The report text is empty\.$/);
+  assert.equal((await t({ game_ids: [] })).isError, true, 'the input is validated');
+  updateSettings({ profile: { usernames: [] } });
+  try {
+    assert.match((await t({})).content, /has not set their usernames in Settings/);
+  } finally {
+    updateSettings({ profile: { usernames: ['student1'] } });
+  }
+  assert.equal(reports(), before);
+  assert.equal(ui.length, 2, 'the Reports screen hears only of the reports added');
+});
+
 test('the coach shows a position with the moves that lead to it, and takes the student to another screen', async () => {
   const ui = [];
   const t = (name, input, screen = null) => executeTool(name, input, { emit: e => ui.push(e), screen });
@@ -245,6 +291,45 @@ test('the coach shows a position with the moves that lead to it, and takes the s
   const n = ui.length;
   assert.match((await t('switch_screen', { screen: 'board', tab: 'lessons' })).content, /has the tabs moves, explorer, game/);
   assert.equal((await t('switch_screen', { screen: 'garden' })).isError, true);
+  assert.equal(ui.length, n, 'nothing happens on the screen after an error');
+});
+
+test('the coach sees whether the student’s Stockfish is on, and switches it on or off', async () => {
+  const ui = [];
+  const t = (name, input, screen = null) => executeTool(name, input, { emit: e => ui.push(e), screen });
+  const at = (view, board, openings) => ({ view, context: view === 'reports' ? null : { mode: view, ucis: ['e2e4'] }, engines: { board, openings } });
+  const state = async screen => (await t('get_board_state', {}, screen)).content.split('\n')[1];
+
+  // get_board_state: on the screen the student is on, and the other screen's switch
+  assert.equal(await state(at('analysis', true, false)), 'Live Stockfish analysis on this screen: on — the student sees its evaluation bar, engine lines and best-move arrow; on the Openings screen: off.');
+  assert.equal(await state(at('openings', true, false)), 'Live Stockfish analysis on this screen: off — the student sees no evaluation bar, engine lines or best-move arrow; on the Board screen: on.');
+  assert.match(await state(at('play', true, true)), /^Live Stockfish analysis on this screen: hidden while the training game is on the board \(the Board screen's switch is on\)/);
+  assert.match(await state(at('drill', false, true)), /: hidden during the repertoire drill \(the Openings screen's switch is on\); on the Board screen: off\.$/);
+  assert.equal(await state(at('reports', true, false)), "Live Stockfish analysis (the student's switches): Board screen on, Openings screen off (none on this screen).");
+
+  // set_engine: by default the screen the student is on
+  const off = await t('set_engine', { on: false }, at('analysis', true, true));
+  assert.equal(off.content, "Switched off the student's live Stockfish analysis on the Board screen: they see no evaluation bar, engine lines or best-move arrow there; your own Stockfish tools work as always.");
+  assert.deepEqual(ui.at(-1), { type: 'ui', action: 'set_engine', screens: ['board'], on: false });
+  assert.equal((await t('set_engine', { on: false }, at('analysis', false, true))).content, "The student's live Stockfish analysis on the Board screen was already off.");
+  // during a drill or a training game it stays hidden
+  const drill = await t('set_engine', { on: true }, at('drill', true, false));
+  assert.deepEqual(ui.at(-1).screens, ['openings']);
+  assert.match(drill.content, /^Switched on the student's live Stockfish analysis on the Openings screen: .* there\. It stays hidden during the repertoire drill they are doing\.$/);
+  assert.match((await t('set_engine', { on: true }, at('play', false, true))).content, /on the Board screen: they see .* there\. It stays hidden while their training game is on the board, and shows when they leave the game\.$/);
+  // another screen's switch, or both; from a screen without live analysis (or with no window), both
+  await t('set_engine', { on: true, screen: 'openings' }, at('analysis', false, false));
+  assert.deepEqual(ui.at(-1).screens, ['openings']);
+  await t('set_engine', { on: true, screen: 'both' }, at('openings', false, false));
+  assert.deepEqual(ui.at(-1).screens, ['board', 'openings']);
+  const fromReports = await t('set_engine', { on: false }, at('reports', true, true));
+  assert.deepEqual(ui.at(-1), { type: 'ui', action: 'set_engine', screens: ['board', 'openings'], on: false });
+  assert.match(fromReports.content, /^Switched off the student's live Stockfish analysis on the Board and Openings screens: /);
+  await t('set_engine', { on: true }, null);
+  assert.deepEqual(ui.at(-1).screens, ['board', 'openings']);
+  // the input is checked
+  const n = ui.length;
+  for (const bad of [{}, { on: 'yes' }, { on: true, screen: 'games' }, { on: true, where: 'board' }]) assert.equal((await t('set_engine', bad)).isError, true, JSON.stringify(bad));
   assert.equal(ui.length, n, 'nothing happens on the screen after an error');
 });
 

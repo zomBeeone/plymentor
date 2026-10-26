@@ -92,6 +92,21 @@ async function handle(text) {
     say(`save_report: ${saved.text}`);
     return;
   }
+  if (/make me a report/i.test(text)) {
+    // adds a report of its own to the Reports screen, written at once
+    const r = await call('create_report', { title: 'Report by the coach', markdown: '## Overview\nA report the fake coach added by itself.' });
+    say(`create_report: ${r.isError ? `ERROR ${r.text.slice(0, 60)}` : /^Added report #\d+/.exec(r.text)?.[0]}`);
+    return;
+  }
+  const engine = /switch stockfish (on|off)/i.exec(text);
+  if (engine) {
+    // switches the student's live Stockfish, then looks whether it is so
+    const r = await call('set_engine', { on: engine[1].toLowerCase() === 'on' });
+    say(`set_engine: ${r.isError ? `ERROR ${r.text.slice(0, 60)}` : 'ok'}`);
+    const b = await call('get_board_state', {});
+    say(`engine here: ${/^Live Stockfish analysis on this screen: (\w+)/m.exec(b.text)?.[1] ?? '?'}`);
+    return;
+  }
   if (/analyse my games/i.test(text)) {
     // (short lines: the terminal wraps long ones)
     const state = r => (r.isError ? `ERROR ${r.text}` : /^Analysis #\d+ .*\) is finished\./.test(r.text) ? 'finished' : r.text.split('\n')[0]);

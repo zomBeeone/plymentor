@@ -1,6 +1,35 @@
 // Live Stockfish analysis client: Stockfish runs in the backend worker; the latest position always wins.
 import { useEffect, useState } from '../vendor/preact.js';
 import { send, subscribe } from './local.js';
+import { stored, store } from './util.js';
+
+// The student's Stockfish switches: the live analysis on the Board and on the Openings screen, each kept across starts.
+// The screens show them; the coach reads them (get_board_state) and turns them (set_engine).
+const SWITCH_KEYS = { board: 'analysis.engine', openings: 'openings.engine' };
+const switches = { board: stored(SWITCH_KEYS.board, true), openings: stored(SWITCH_KEYS.openings, true) };
+const switchSubs = new Set();
+
+export const engineSwitches = () => ({ ...switches });
+
+/** Turns the switch of `screen` (board or openings); returns whether it changed. */
+export function setEngineSwitch(screen, on) {
+  if (!Object.hasOwn(switches, screen) || switches[screen] === on) return false;
+  switches[screen] = on;
+  store(SWITCH_KEYS[screen], on);
+  for (const fn of [...switchSubs]) fn();
+  return true;
+}
+
+/** The switch of `screen`; the calling component re-renders when it changes (the student's doing or the coach's). */
+export function useEngineSwitch(screen) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const fn = () => force(x => x + 1);
+    switchSubs.add(fn);
+    return () => switchSubs.delete(fn);
+  }, []);
+  return switches[screen];
+}
 
 class LiveEngine {
   constructor() {

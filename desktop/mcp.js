@@ -12,7 +12,7 @@ const BASE = process.env.PLYMENTOR_URL || '';
 const TOKEN = process.env.PLYMENTOR_TOKEN || '';
 const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const INSTRUCTIONS =
-  "Tools of the Plymentor chess app, running on the student's computer: Stockfish analysis, the student's board (get_board_state to see it, set_board to show positions, switch_screen to take them to another screen), their games and statistics, training material, and your long-term notes about the student.";
+  "Tools of the Plymentor chess app, running on the student's computer: Stockfish analysis, the student's board (get_board_state to see it, set_board to show positions, switch_screen to take them to another screen, set_engine to switch their live Stockfish on or off), their games, statistics and reports, training material, and your long-term notes about the student.";
 
 const send = msg => process.stdout.write(JSON.stringify(msg) + '\n');
 const log = (...a) => process.stderr.write(`[plymentor mcp] ${a.join(' ')}\n`);

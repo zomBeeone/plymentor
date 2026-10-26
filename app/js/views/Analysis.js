@@ -5,7 +5,7 @@ import { api, get, post, qs } from '../api.js';
 import { state, toast, useStore, coachReady } from '../store.js';
 import { BoardCtrl, useCtrl, useBoardKeys, useMedia, useForce } from '../ctrl.js';
 import { Tree, placeCoachPosition } from '../tree.js';
-import { engine, useLiveEval } from '../engine.js';
+import { engine, useLiveEval, engineSwitches, setEngineSwitch, useEngineSwitch } from '../engine.js';
 import { Board, glyphShape } from '../components/Board.js';
 import { EvalBar } from '../components/EvalBar.js';
 import { MoveList } from '../components/MoveList.js';
@@ -26,7 +26,6 @@ const ctrl = new BoardCtrl();
 const ui = {
   gameId: null,
   game: null,
-  engineOn: stored('analysis.engine', true),
   multipv: stored('analysis.multipv', 3),
   tab: stored('analysis.tab', 'moves'),
   compactTab: 'coach',
@@ -317,10 +316,7 @@ function closeGame({ ask = true, engineOn = false } = {}) {
   if (ask && !p.result && !confirm('Stop this training game? Its moves stay on the board so you can analyse them.')) return;
   p.stopped = true;
   ui.play = null;
-  if (engineOn && !ui.engineOn) {
-    ui.engineOn = true;
-    store('analysis.engine', true);
-  }
+  if (engineOn) setEngineSwitch('board', true);
   ctrl.emit();
 }
 
@@ -334,7 +330,8 @@ export function Analysis({ route }) {
   ui.coach = coach;
   const node = ctrl.node;
   const p = ui.play;
-  const live = useLiveEval(ui.engineOn && !p ? node.fen : '__off__');
+  const engineOn = useEngineSwitch('board');
+  const live = useLiveEval(engineOn && !p ? node.fen : '__off__');
   const compact = useMedia('(max-width: 1280px)');
   const [modal, setModal] = useState(null);
 
@@ -374,9 +371,9 @@ export function Analysis({ route }) {
   }, [route]);
 
   useEffect(() => {
-    if (ui.engineOn && !ui.play) engine.analyze(node.fen, ui.multipv);
+    if (engineOn && !ui.play) engine.analyze(node.fen, ui.multipv);
     else engine.stop();
-  }, [node.fen, ui.engineOn, ui.multipv, !!p]);
+  }, [node.fen, engineOn, ui.multipv, !!p]);
   useEffect(
     () => () => {
       engine.stop();
@@ -428,9 +425,7 @@ export function Analysis({ route }) {
   });
 
   function toggleEngine() {
-    ui.engineOn = !ui.engineOn;
-    store('analysis.engine', ui.engineOn);
-    rerender();
+    setEngineSwitch('board', !engineSwitches().board);
   }
 
   async function judge(parent, child) {
@@ -518,7 +513,7 @@ export function Analysis({ route }) {
   const yourMove = studentToMove(p) && node === p.tip;
   const shapes = [];
   const best = live?.lines?.[0]?.pv?.[0];
-  if (!p && ui.engineOn && best && s.settings?.board?.bestArrow !== false) shapes.push({ orig: best.slice(0, 2), dest: best.slice(2, 4), brush: 'paleBlue' });
+  if (!p && engineOn && best && s.settings?.board?.bestArrow !== false) shapes.push({ orig: best.slice(0, 2), dest: best.slice(2, 4), brush: 'paleBlue' });
   if (ui.coachShapes && repKey(ui.coachShapes.fen) === repKey(node.fen)) shapes.push(...ui.coachShapes.shapes);
   if (node.judge?.classification && node.uci && (!p || node.color === p.color)) shapes.push(glyphShape(node.uci.slice(2, 4), node.judge.classification));
   const caption = ui.caption && repKey(ui.caption.fen) === repKey(node.fen) ? ui.caption.text : null;
@@ -575,7 +570,7 @@ export function Analysis({ route }) {
   const enginePanel = html`<${EnginePanel}
     fen=${node.fen}
     data=${live}
-    enabled=${ui.engineOn}
+    enabled=${engineOn}
     onToggle=${toggleEngine}
     multipv=${ui.multipv}
     onMultipv=${n => {
@@ -608,7 +603,7 @@ export function Analysis({ route }) {
     <div class="workspace">
       <div class="board-col">
         <div class="board-area">
-          ${!p && s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${ui.engineOn || node.score ? scoreForBar : null} orientation=${ctrl.orientation} />`}
+          ${!p && s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${engineOn || node.score ? scoreForBar : null} orientation=${ctrl.orientation} />`}
           <${Board}
             fen=${node.fen}
             orientation=${ctrl.orientation}

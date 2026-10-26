@@ -84,6 +84,10 @@ const text = (page, sel) => page.eval(`[...document.querySelectorAll(${JSON.stri
 const pills = page => text(page, '.status-pills .pill');
 const term = page => page.eval(`document.querySelector('.xterm-rows')?.innerText || ''`);
 const gameRows = page => page.eval(`document.querySelectorAll('table.data tbody tr').length`);
+// Types into the coach's terminal (in the coach panel on the screen), as the student would — input events of the page,
+// not key presses: those only arrive while the test window has the keyboard focus.
+const ask = (page, text) =>
+  page.eval(`(t => { t.focus(); for (const data of [${JSON.stringify(text)}, '\\r']) t.dispatchEvent(new InputEvent('input', { data, inputType: 'insertText', bubbles: true })); return true; })([...document.querySelectorAll('.xterm-helper-textarea')].find(t => t.offsetParent))`);
 
 /** The test's game database as the student would have it after unpacking a download: Test_Base.si5/.sn5/.sg5. */
 function makeScidDatabase() {
@@ -239,8 +243,7 @@ async function main() {
     // typed into the coach's terminal (in the coach panel of the Board screen), as the student would
     await go(page, '#/analysis');
     await page.waitFor(`[...document.querySelectorAll('.xterm-helper-textarea')].some(t => t.offsetParent)`, { what: 'the coach panel' });
-    // (input events of the page, not key presses: those only arrive while the test window has the keyboard focus)
-    await page.eval(`(t => { t.focus(); for (const data of ['Please analyse my games', '\\r']) t.dispatchEvent(new InputEvent('input', { data, inputType: 'insertText', bubbles: true })); return true; })([...document.querySelectorAll('.xterm-helper-textarea')].find(t => t.offsetParent))`);
+    await ask(page, 'Please analyse my games');
     await page.waitFor(`/> Please analyse my games/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 15000, what: 'the request in the coach’s terminal' });
     await page.waitFor(`/analyze_games: finished, 3 games$/m.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 90000, what: 'the coach’s analysis result' });
     await page.waitFor(`/get_analysis_status: finished/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { what: 'the analysis status' });
@@ -275,6 +278,16 @@ async function main() {
     await page.waitFor(`/explain: Current position/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 30000, what: 'the explain request' });
   });
 
+  await step('the coach sees whether the student’s Stockfish is on, and switches it off and on again (set_engine)', async () => {
+    // (on the Board, with its live analysis on)
+    await ask(page, 'Please switch Stockfish off');
+    await page.waitFor(`/Stockfish off/.test(document.querySelector('.engine')?.innerText || '') && !document.querySelector('.engine .switch.on') && /Your coach turned off Stockfish on the Board screen/.test(document.querySelector('.toasts')?.innerText || '')`, { timeout: 15000, what: 'Stockfish off on the board, and the toast' });
+    await page.waitFor(`/engine here: off/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 15000, what: 'the coach seeing it off' });
+    await ask(page, 'Please switch Stockfish on');
+    await page.waitFor(`/engine here: on/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 15000, what: 'the coach seeing it on' });
+    await page.waitFor(`document.querySelector('.engine .switch.on') && /depth [1-9]/.test(document.querySelector('.engine')?.innerText || '')`, { timeout: 30000, what: 'Stockfish on again' });
+  });
+
   await step('a training game against Stockfish', async () => {
     await page.click('button', 'Play vs Stockfish');
     await page.waitFor(`document.querySelector('.modal')`, { what: 'the new-game dialog' });
@@ -296,6 +309,15 @@ async function main() {
     await page.click('button', 'Write my report');
     await page.waitFor(`/A test report written by the fake coach/.test(document.querySelector('.report-text')?.innerText || '')`, { timeout: 30000, what: 'the saved report' });
     await page.waitFor(`document.querySelector('.report-text .diagram .cg-wrap')`, { what: 'the board diagram in the report' });
+  });
+
+  await step('the coach adds a report by itself (create_report): it opens on the Reports screen, written', async () => {
+    // (typed in the coach panel of the report it has just written)
+    await ask(page, 'Please make me a report of all my games');
+    await page.waitFor(`/create_report: Added report #\\d+/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 30000, what: 'the coach’s answer' });
+    await page.waitFor(`document.querySelector('.detail h1')?.innerText === 'Report by the coach' && /A report the fake coach added by itself/.test(document.querySelector('.report-text')?.innerText || '')`, { timeout: 15000, what: 'the new report, open' });
+    await page.waitFor(`(l => l.length === 2 && /Report by the coach[\\s\\S]*3 games[\\s\\S]*coach report/.test(l[0].innerText) && l[0].classList.contains('active'))([...document.querySelectorAll('.report-item')])`, { what: 'the new report first in the list' });
+    assert(/3 analysed games/.test(await text(page, '.detail')), 'its statistics: the 3 games of student1');
   });
 
   await step('openings: search, the opening’s name, and the explorer’s two tabs (Database, My games)', async () => {
