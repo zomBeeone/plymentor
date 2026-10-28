@@ -1,5 +1,5 @@
 // Training: exercises from your own mistakes (spaced repetition) and interactive lessons with the coach.
-import { html, useEffect, useState } from '../../vendor/preact.js';
+import { html, useEffect, useRef, useState } from '../../vendor/preact.js';
 import { get, post, del } from '../api.js';
 import { setState, toast, useStore, coachReady } from '../store.js';
 import { BoardCtrl, useCtrl, useBoardKeys, useForce } from '../ctrl.js';
@@ -16,6 +16,8 @@ import { clearParams } from '../router.js';
 
 const ex = { list: null, current: null, fen: null, lastMove: null, feedback: null, attempts: 0, solved: false, shapes: [], tab: stored('train.tab', 'exercises') };
 const lctrl = new BoardCtrl();
+/** An exercise done (solved, or its solution shown) and not due again yet. */
+const isDone = e => (e.reps > 0 || e.lapses > 0) && !!e.due && e.due > Date.now();
 const lesson = { question: null, caption: null, shapes: null, started: false, topic: null };
 
 const TOPICS = [
@@ -68,6 +70,10 @@ function Exercises() {
   const rerender = useForce();
   const coach = useCoachHandle();
   const [busy, setBusy] = useState(false);
+  const deck = useRef();
+
+  // the exercise on the board stays in sight in the deck
+  useEffect(() => deck.current?.querySelector('.item.active')?.scrollIntoView({ block: 'nearest' }), [ex.current?.id]);
 
   const load = async () => {
     const r = await get('/api/exercises');
@@ -130,6 +136,7 @@ function Exercises() {
         sound('Confirmation');
         ex.feedback = { kind: 'good', text: res.exact ? `Correct — ${res.san}!` : `Good — ${res.san} works too (the engine's line was ${res.solution.sans?.[0]}).` };
         await post(`/api/exercises/${cur.id}/review`, { grade: ex.attempts === 1 ? 2 : 1 });
+        load().catch(() => {}); // (the deck marks it done)
         if (res.solution?.ucis?.length > 1 && res.exact) {
           // show the rest of the solution
           let fen = ex.fen;
@@ -173,6 +180,7 @@ function Exercises() {
     ex.feedback = { kind: 'info', text: `Solution: ${(sol.sans || []).join(' ')}` };
     if (failed !== false) await post(`/api/exercises/${cur.id}/review`, { grade: 0 }).catch(() => {});
     rerender();
+    load().catch(() => {}); // (the deck marks it done)
   }
 
   async function finish() {
@@ -227,11 +235,13 @@ function Exercises() {
     <div class="side-col">
       <div class="panel" style="flex:0 0 34%;min-height:140px">
         <div class="panel-head"><span class="title">Your deck</span></div>
-        <div class="panel-body ex-list">
+        <div class="panel-body ex-list" ref=${deck}>
           ${(ex.list || []).map(
-            e => html`<div class="item">
+            e => html`<div class=${cls('item', ex.current?.id === e.id && 'active', isDone(e) && 'done')} title=${ex.current?.id === e.id ? 'The exercise on the board' : ''}>
               <span class="grow ellipsis">${e.prompt || 'Find the best move'} ${(e.themes || []).length ? html`<small class="muted">· ${e.themes.join(', ').replace(/_/g, ' ')}</small>` : ''}</span>
-              <small class="muted nowrap">${!e.due || e.due <= Date.now() ? 'due' : `next ${formatTime(e.due)}`}</small>
+              ${isDone(e)
+                ? html`<small class="nowrap ex-done" title=${`Done — it comes back ${formatTime(e.due)}`}>✓ Done</small>`
+                : html`<small class="muted nowrap">${!e.due || e.due <= Date.now() ? 'due' : `next ${formatTime(e.due)}`}</small>`}
               <button class="btn small ghost" title="Practise now" onClick=${() => {
                 ex.current = e;
                 ex.fen = e.fen;

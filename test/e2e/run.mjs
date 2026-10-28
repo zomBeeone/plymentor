@@ -393,9 +393,22 @@ async function main() {
     assert(after.main === 0 && after.moves === 24, `afterwards: ${JSON.stringify(after)}`);
   });
 
-  await step('train: exercises screen', async () => {
+  await step('train: exercises — the one on the board highlighted in the deck, the ones done marked', async () => {
     await go(page, '#/train');
     await page.waitFor(`document.body.innerText.includes('Generate from my games')`, { what: 'exercises' });
+    await ask(page, 'Please make me two exercises');
+    await page.waitFor(`/create_exercise: ok ok/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 30000, what: 'the coach’s answer' });
+    const item = name => `[...document.querySelectorAll('.ex-list .item')].find(i => i.innerText.includes(${JSON.stringify(name)}))`;
+    await page.waitFor(`document.querySelectorAll('.ex-list .item').length === 2 && ${item('Back rank')}?.classList.contains('active')`, { timeout: 15000, what: 'the first exercise on the board, highlighted' });
+    assert((await page.eval(`document.querySelectorAll('.ex-list .item.active, .ex-list .item.done').length`)) === 1, 'one highlighted, none done yet');
+    // solved: marked done at once, still highlighted while it is on the board
+    await page.clickSquare('.board-area .cg-wrap', 'd1');
+    await page.clickSquare('.board-area .cg-wrap', 'd8');
+    await page.waitFor(`/Correct/.test(document.querySelector('.feedback')?.innerText || '')`, { timeout: 15000, what: 'the answer checked' });
+    await page.waitFor(`(i => i.classList.contains('active') && i.classList.contains('done') && /✓ Done/.test(i.innerText))(${item('Back rank')})`, { what: 'the solved exercise marked done' });
+    // the next one: highlighted in its turn
+    await page.click('button', 'Next exercise');
+    await page.waitFor(`${item('Queen')}.classList.contains('active') && !${item('Back rank')}.classList.contains('active') && /✓ Done/.test(${item('Back rank')}.innerText) && !/Done/.test(${item('Queen')}.innerText)`, { what: 'the second exercise highlighted, the first still done' });
   });
 
   await step('settings: the coach’s notes, the coach programs, the data folder; no move comments, Lichess token or 1.x import', async () => {

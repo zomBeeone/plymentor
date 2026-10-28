@@ -463,6 +463,11 @@ table.data td.players { white-space: normal; min-width: 220px; }
 .search-results .item:hover { background: var(--panel2); }
 .search-results .item .n { color: var(--strong); font-weight: 600; }
 .ex-list .item { display: flex; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid #2c2a27; }
+/* the deck: the exercise on the board highlighted, the ones done marked */
+.ex-list .item.done > .grow { color: var(--muted); }
+.ex-list .item.active { background: var(--panel3); box-shadow: inset 3px 0 0 var(--accent-hi); }
+.ex-list .item.active > .grow { color: var(--strong); font-weight: 600; }
+.ex-done { color: var(--accent-hi); font-weight: 600; }
 
 /* ---------- settings ---------- */
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px 16px; }

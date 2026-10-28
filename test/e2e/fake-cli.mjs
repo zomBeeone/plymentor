@@ -98,6 +98,13 @@ async function handle(text) {
     say(`create_report: ${r.isError ? `ERROR ${r.text.slice(0, 60)}` : /^Added report #\d+/.exec(r.text)?.[0]}`);
     return;
   }
+  if (/make me two exercises/i.test(text)) {
+    // two mates in one for the training deck
+    const a = await call('create_exercise', { fen: '6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1', solution: ['Rd8#'], prompt: 'Back rank: mate in one' });
+    const b = await call('create_exercise', { fen: '6k1/5ppp/8/8/8/8/5PPP/2Q3K1 w - - 0 1', solution: ['Qc8#'], prompt: 'Queen: mate in one' });
+    say(`create_exercise: ${[a, b].map(r => (r.isError ? 'ERROR' : 'ok')).join(' ')}`);
+    return;
+  }
   const engine = /switch stockfish (on|off)/i.exec(text);
   if (engine) {
     // switches the student's live Stockfish, then looks whether it is so
