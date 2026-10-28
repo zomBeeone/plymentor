@@ -15,7 +15,7 @@ import { coachSays, stopSpeaking } from './voice.js';
 import { engineSwitches, setEngineSwitch } from './engine.js';
 import { COACH_PROTOCOL, APP_VERSION } from '../../shared/protocol.js';
 import { CLI_TASKS } from '../../shared/prompts.js';
-import { SCREENS } from '../../shared/tools.js';
+import { SCREENS, ENGINE_LABELS } from '../../shared/tools.js';
 
 const THEME = {
   background: '#161512',
@@ -493,7 +493,7 @@ export function onCoachUi(ev) {
   if (ev.action === 'report_created') toast(`Your coach added the report “${ev.title}” to the Reports screen.`, 'success', 6000);
   if (ev.action === 'set_engine') {
     const changed = (Array.isArray(ev.screens) ? ev.screens : []).filter(s => setEngineSwitch(s, !!ev.on));
-    if (changed.length) toast(`Your coach turned ${ev.on ? 'on' : 'off'} Stockfish on the ${changed.map(s => SCREENS[s].label).join(' and ')} screen${changed.length > 1 ? 's' : ''}.`);
+    if (changed.length) toast(`Your coach turned ${ev.on ? 'on' : 'off'} Stockfish on the ${changed.map(s => ENGINE_LABELS[s]).join(' and ')} screen${changed.length > 1 ? 's' : ''}.`);
   }
   window.dispatchEvent(new CustomEvent('cc:coach-ui', { detail: ev }));
   // switch_screen: the screen takes its tab from the route (and drops it from the address once it has it)

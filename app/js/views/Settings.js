@@ -209,7 +209,7 @@ function VoiceSettings({ st }) {
         <input type="radio" name="voice-engine" checked=${v.engine === 'natural'} onChange=${() => save({ voice: { engine: 'natural' } }, true)} />
         <div class="grow">
           <div><b>Natural voice</b> <span class="muted">— Kokoro, a neural voice that runs on your computer: free, private and very human-sounding. English.</span> <span class="badge green">recommended</span></div>
-          <div class="muted" style="font-size:12.5px">${downloaded ? html`<span class="ok-text">Downloaded</span>` : 'A one-time download of about 90 MB; after that it works offline.'}${!english ? ` Your coach speaks ${st.language}, so the system voice is used instead.` : ''}</div>
+          <div class="muted" style="font-size:12.5px">${downloaded ? html`<span class="ok-text">Downloaded</span>` : 'A one-time download of about 330 MB; after that it works offline (on your graphics card when you have one: much faster).'}${!english ? ` Your coach speaks ${st.language}, so the system voice is used instead.` : ''}</div>
         </div>
       </label>
       <label class=${cls('provider', v.engine === 'browser' && 'active')}>

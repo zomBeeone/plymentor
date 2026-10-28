@@ -549,3 +549,91 @@ body.start-page { overflow: auto; min-height: 100%; display: flex; align-items: 
 .gdb-game .res.b { background: #2b2926; color: #ddd; box-shadow: inset 0 0 0 1px #555; }
 .gdb-foot { display: flex; gap: 8px; align-items: center; padding: 6px 10px; font-size: 11.5px; border-top: 1px solid #2c2a27; margin-top: 6px; }
 .gdb-foot > span:first-child { min-width: 0; }
+
+/* The Book reader: its tab a little apart from the others (its name golden yellow), the books, and a book's page next to the board */
+.nav a.nav-apart { margin-left: 26px; color: #e8b62c; }
+.nav a.nav-apart:hover, .nav a.nav-apart.active { color: #ffcc3d; }
+.page.drop-over { outline: 2px dashed var(--accent-hi); outline-offset: -8px; }
+.book-drop { text-align: center; border-style: dashed; }
+.book-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 14px; }
+.book-card { background: var(--panel); border: 1px solid #2f2c29; border-radius: var(--radius); padding: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.book-card:hover { border-color: #4a4642; background: var(--panel2); }
+.book-card > .btn { align-self: flex-start; margin-top: 4px; }
+.book-cover { aspect-ratio: 3 / 4; border-radius: 4px; overflow: hidden; background: #3a3733; display: flex; align-items: center; justify-content: center; margin-bottom: 6px; color: var(--muted); font-weight: 700; letter-spacing: 0.1em; }
+.book-cover img { width: 100%; height: 100%; object-fit: cover; }
+.book-name { color: var(--strong); font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.book-facts { font-size: 12px; }
+
+.book-reader { --board-size: min(calc(100vh - var(--topbar) - 390px), 34vw, 560px); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px; height: 100%; }
+.book-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.book-head { display: flex; align-items: center; gap: 6px; flex: none; min-width: 0; }
+.book-title { color: var(--strong); font-weight: 600; font-size: 15px; }
+.book-chapters { max-width: 260px; }
+.book-where { font-size: 12.5px; min-width: 96px; text-align: center; }
+.book-page { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; border-radius: var(--radius); background: #2b2926; border: 1px solid #2f2c29; display: flex; align-items: center; justify-content: center; }
+.book-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; width: calc(var(--board-size) + 26px); } /* (the board and its evaluation bar) */
+.book-side .panel.grow { flex: 1 1 0; min-height: 90px; }
+.book-side .panel.book-engine { flex: none; }
+.book-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.book-controls .btn.icon { min-width: 36px; justify-content: center; }
+.book-play { min-width: 96px; justify-content: center; }
+.book-status { font-size: 12.5px; min-height: 18px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.spinner.small { width: 11px; height: 11px; }
+
+/* a PDF page: its picture, and its text over it (transparent: only the marks show) */
+.bk-sheet { position: relative; background: #fff; box-shadow: 0 4px 18px rgb(0 0 0 / 0.5); }
+.bk-sheet canvas { display: block; }
+.bk-pdf .textLayer { position: absolute; inset: 0; overflow: clip; line-height: 1; text-align: initial; transform-origin: 0 0; mix-blend-mode: multiply; --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size)); --min-font-size-inv: calc(1 / var(--min-font-size)); }
+.bk-pdf .textLayer > span, .bk-pdf .textLayer .markedContent > span:not(.markedContent) {
+  position: absolute; white-space: pre; color: transparent; transform-origin: 0% 0%;
+  --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1; --rotate: 0deg; transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.bk-pdf .textLayer .markedContent { display: contents; }
+.bk-pdf .textLayer br { display: none; }
+.bk-pdf .textLayer .endOfContent { display: none; }
+/* the diagrams the reader found: a box to click over each, the one on the board marked, a badge saying whether it was read */
+.bk-diagrams { position: absolute; inset: 0; pointer-events: none; }
+.bk-diagram { position: absolute; pointer-events: auto; cursor: pointer; border-radius: 3px; transition: box-shadow 0.15s, background 0.15s; }
+.bk-diagram:hover { box-shadow: inset 0 0 0 2px rgb(98 153 36 / 0.9); background: rgb(98 153 36 / 0.08); }
+.bk-diagram.bk-shown { box-shadow: inset 0 0 0 3px #2c6ab0, 0 0 0 2px rgb(54 146 231 / 0.35); }
+.bk-diagram::after { content: '♟'; position: absolute; right: -8px; top: -8px; width: 18px; height: 18px; border-radius: 50%; background: #629924; color: #fff; font-size: 12px; line-height: 18px; text-align: center; box-shadow: 0 1px 3px rgb(0 0 0 / 0.4); }
+.bk-diagram.unread { cursor: help; }
+.bk-diagram.unread:hover { box-shadow: inset 0 0 0 2px rgb(110 104 96 / 0.9); background: none; }
+.bk-diagram.unread::after { content: '?'; background: #6e6860; }
+
+/* an EPUB chapter, in pages: columns of the page's size, one shown at a time */
+.book-page.bk-epub { background: #f4efe5; display: block; }
+.bk-box { position: absolute; inset: 26px 34px; overflow: hidden; }
+.bk-flow { position: relative; column-fill: auto; color: #24211d; font: 17px/1.6 Georgia, 'Times New Roman', serif; transition: transform 0.18s ease-out; }
+.bk-flow p, .bk-flow blockquote, .bk-flow pre, .bk-flow figcaption { margin: 0 0 0.75em; }
+.bk-flow h2, .bk-flow h3, .bk-flow h4, .bk-flow h5 { color: #16130f; font-family: inherit; margin: 0.6em 0 0.5em; break-after: avoid; }
+.bk-flow h2 { font-size: 1.5em; }
+.bk-flow h3 { font-size: 1.28em; }
+.bk-flow h4, .bk-flow h5 { font-size: 1.1em; }
+.bk-flow blockquote { padding-left: 1em; border-left: 3px solid #d6cdbd; }
+.bk-flow pre { white-space: pre-wrap; font: 15px/1.5 var(--mono); }
+.bk-flow figcaption { font-size: 0.9em; color: #5a544b; text-align: center; }
+.bk-flow .bk-li { padding-left: 1.2em; text-indent: -0.8em; }
+.bk-flow .bk-li::before { content: '• '; }
+.bk-figure { margin: 0.4em 0 0.9em; text-align: center; break-inside: avoid; }
+.bk-figbox { position: relative; display: inline-block; max-width: 100%; vertical-align: top; border-radius: 3px; }
+.bk-figure img { display: block; max-width: 100%; max-height: 62vh; }
+/* an EPUB's diagrams (pictures with a board): marked like a PDF page's */
+.bk-figure[data-d] .bk-figbox { cursor: pointer; transition: box-shadow 0.15s; }
+.bk-figure[data-d] .bk-figbox:hover { box-shadow: 0 0 0 2px rgb(98 153 36 / 0.9); }
+.bk-figure[data-d].bk-shown .bk-figbox { box-shadow: 0 0 0 3px #2c6ab0, 0 0 0 5px rgb(54 146 231 / 0.35); }
+.bk-figure[data-d] .bk-figbox::after { content: '♟'; position: absolute; right: -8px; top: -8px; width: 18px; height: 18px; border-radius: 50%; background: #629924; color: #fff; font-size: 12px; line-height: 18px; text-align: center; box-shadow: 0 1px 3px rgb(0 0 0 / 0.4); }
+.bk-figure[data-d].unread .bk-figbox { cursor: help; }
+.bk-figure[data-d].unread .bk-figbox:hover { box-shadow: 0 0 0 2px rgb(110 104 96 / 0.9); }
+.bk-figure[data-d].unread .bk-figbox::after { content: '?'; background: #6e6860; }
+
+/* the marks: the sentence being read, the moves (the one being said, the ones only named, the ones without a known position) */
+.book-page [data-s] { cursor: pointer; border-radius: 2px; }
+.book-page .bk-m { background: rgb(98 153 36 / 0.2); box-shadow: inset 0 -2px 0 rgb(98 153 36 / 0.85); }
+.book-page .bk-m.shown { box-shadow: inset 0 -2px 0 rgb(98 153 36 / 0.45); background: rgb(98 153 36 / 0.1); }
+.book-page .bk-m.unknown { background: none; box-shadow: inset 0 -1px 0 rgb(110 104 96 / 0.9); }
+.book-page .bk-cur { background: rgb(255 210 60 / 0.45); }
+.book-page .bk-m.bk-cur { background: rgb(255 200 40 / 0.6); }
+.book-page .bk-now, .book-page .bk-m.bk-now { background: rgb(54 146 231 / 0.5); box-shadow: inset 0 -2px 0 #2c6ab0; }
+.book-page.bk-pdf.bk-wide { overflow-y: auto; align-items: flex-start; padding: 8px 0; }

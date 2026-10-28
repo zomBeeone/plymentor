@@ -373,6 +373,17 @@ test('the coach sees whether the student’s Stockfish is on, and switches it on
   assert.match(fromReports.content, /^Switched off the student's live Stockfish analysis on the Board and Openings screens: /);
   await t('set_engine', { on: true }, null);
   assert.deepEqual(ui.at(-1).screens, ['board', 'openings']);
+  // the Book reader's board has its own switch
+  const reader = (books, board = true, openings = false) => ({ view: 'books', context: { mode: 'book', ucis: ['e2e4'] }, engines: { board, openings, books } });
+  assert.equal(
+    await state(reader(true)),
+    "Live Stockfish analysis on the Book reader's board: on — the student sees its evaluation bar, engine lines and best-move arrow; on the Board screen: on, on the Openings screen: off.",
+  );
+  const offInReader = await t('set_engine', { on: false }, reader(true));
+  assert.deepEqual(ui.at(-1), { type: 'ui', action: 'set_engine', screens: ['books'], on: false });
+  assert.match(offInReader.content, /^Switched off the student's live Stockfish analysis on the Book reader screen: /);
+  await t('set_engine', { on: true, screen: 'books' }, at('analysis', true, true));
+  assert.deepEqual(ui.at(-1).screens, ['books']);
   // the input is checked
   const n = ui.length;
   for (const bad of [{}, { on: 'yes' }, { on: true, screen: 'games' }, { on: true, where: 'board' }]) assert.equal((await t('set_engine', bad)).isError, true, JSON.stringify(bad));

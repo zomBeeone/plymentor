@@ -34,6 +34,7 @@
   "devDependencies": {
     "@lichess-org/chessground": "^10.4.2",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2",
+    "@tesseract.js-data/eng": "1.0.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/addon-web-links": "^0.12.0",
@@ -47,9 +48,12 @@
     "htm": "^3.1.1",
     "kokoro-js": "1.2.1",
     "marked": "^18.0.14",
+    "pdfjs-dist": "6.4.299",
     "preact": "^11.0.0",
     "sharp": "^0.34.5",
     "stockfish": "19.0.0",
+    "tesseract.js": "7.0.0",
+    "tesseract.js-core": "6.1.2",
     "ws": "^8.22.0"
   },
   "build": {
@@ -88,7 +92,10 @@
       "build/desktop/mcp.cjs",
       "build/app/voice/**",
       "build/app/engine/**",
-      "build/app/js/sqlite3.wasm"
+      "build/app/js/sqlite3.wasm",
+      "build/app/js/pdf*.mjs",
+      "build/app/pdf/**",
+      "build/app/ocr/**"
     ],
     "publish": [
       {

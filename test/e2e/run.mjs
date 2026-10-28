@@ -23,6 +23,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { buildBlockMap } from 'app-builder-lib/out/targets/blockmap/blockmap.js';
 import { App, sleep } from './cdp.mjs';
 import { startFakeGitHub } from './fake-github.mjs';
+import { makeEpub, makePdf, makeScannedPdf } from './make-books.mjs';
 import { extract7z } from '../../desktop/gigabase/sevenzip.js';
 import { hashFile, portableName, setupName, signRelease } from '../../desktop/update-manifest.js';
 import { APP_VERSION, LOCAL_PROFILE_ID } from '../../shared/protocol.js';
@@ -411,6 +412,95 @@ async function main() {
     // the next one: highlighted in its turn
     await page.click('button', 'Next exercise');
     await page.waitFor(`${item('Queen')}.classList.contains('active') && !${item('Back rank')}.classList.contains('active') && /✓ Done/.test(${item('Back rank')}.innerText) && !/Done/.test(${item('Queen')}.innerText)`, { what: 'the second exercise highlighted, the first still done' });
+  });
+
+  await step('book reader: an EPUB and a PDF added, read aloud, the board plays the moves, a move clicked, the place kept', async () => {
+    const dir = join(TMP, 'e2e-books');
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    await makeEpub(join(dir, 'test-book.epub'));
+    makePdf(join(dir, 'test-book.pdf'));
+    await go(page, '#/books');
+    await page.waitFor(`document.body.innerText.includes('No books yet')`, { what: 'the empty book list' });
+    await page.setFiles('input[type=file][accept*=".epub"]', [join(dir, 'test-book.epub'), join(dir, 'test-book.pdf')]);
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 2 && document.querySelector('.book-cover img')`, { timeout: 30000, what: 'the two books, with a cover' });
+    // a stand-in for the voice: nothing is said out loud, every part "takes" 100 ms
+    await page.eval(`(() => { window.ccSaid = []; speechSynthesis.speak = u => { window.ccSaid.push(u.text); setTimeout(() => u.onend?.(), 100); }; speechSynthesis.cancel = () => {}; return true; })()`);
+    const active = `document.querySelector('.book-side .movelist .active')?.innerText || ''`;
+    await page.click('.book-card', 'EPUB');
+    await page.waitFor(`document.querySelectorAll('.bk-flow .bk-m').length === 36`, { timeout: 30000, what: 'the 36 moves marked on the EPUB page' });
+    assert(!(await page.eval(`!!document.querySelector('.bk-flow :is(script, style, a, [onclick], [style*="red"])')`)), 'nothing of the book’s own markup on the page');
+    await page.click('.book-play');
+    await page.waitFor(`window.ccSaid.includes('11. bishop takes f6')`, { timeout: 20000, what: 'the reading' });
+    await page.waitFor(`/Bxf6|Nxf6|g5|Nd7|f5/.test(${active})`, { what: 'the board following the reading' });
+    await page.waitFor(`window.ccSaid.includes('White wants the d5 square for a knight.')`, { what: 'a sentence with a square in it, said at once' });
+    await page.click('.book-play');
+    const said = await page.eval('window.ccSaid.slice(0, 6)');
+    assert(JSON.stringify(said) === '["The Najdorf","Game 1","1. e4","c5","2. knight to f3","d6"]', `said: ${JSON.stringify(said)}`);
+    // Stockfish on the reader's board: its evaluation bar and its lines (the Book reader's own switch)
+    await page.waitFor(`document.querySelector('.book-side .board-area .eval-bar') && /depth [1-9]/.test(document.querySelector('.book-side .book-engine')?.innerText || '')`, { timeout: 30000, what: 'Stockfish on the reader’s board' });
+    // a move clicked on the page: the board shows it; the reading goes on after it (and is kept)
+    await page.eval(`([...document.querySelectorAll('.bk-flow .bk-m')].find(e => e.textContent === '10.Bd3').click(), true)`);
+    await page.waitFor(`${active} === 'Bd3'`, { what: 'the variation’s move on the board' });
+    await sleep(500); // (the page marks the new sentence a moment after the board shows the move)
+    const at = await page.waitFor(`document.querySelector('.bk-flow .bk-cur')?.textContent`, { what: 'the sentence after it' });
+    await go(page, '#/books');
+    await page.waitFor(`/EPUB · 3 chapters · \\d+% read/.test(document.querySelector('.book-grid')?.innerText || '')`, { what: 'the share read' });
+    await page.click('.book-card', 'EPUB');
+    await page.waitFor(`document.querySelector('.bk-flow .bk-cur')?.textContent === ${JSON.stringify(at)}`, { timeout: 20000, what: 'the place kept' });
+    // its diagram, a picture of a board (merida pieces on coloured squares): read — the position after 15...Bf8 —, clicked
+    await page.waitFor(`document.querySelectorAll('.bk-flow .bk-figure[data-d]').length === 1 && !document.querySelector('.bk-flow .bk-figure.unread')`, { timeout: 30000, what: 'the EPUB’s diagram, read' });
+    await page.eval(`(document.querySelector('.bk-flow .bk-figure[data-d]').click(), true)`);
+    await page.waitFor(`${active} === 'Bf8' && document.querySelector('.bk-flow .bk-figure.bk-shown')`, { what: 'the diagram’s position on the board, marked on the page' });
+    // a game in descriptive notation (chapter 3): its moves marked, read aloud as the board plays them, through its
+    // diagram (cburnett pieces on grey squares) to the moves after it
+    await page.eval(`(s => (s.value = '2', s.dispatchEvent(new Event('change', { bubbles: true })), true))(document.querySelector('.book-chapters'))`);
+    await page.waitFor(`document.querySelectorAll('.bk-flow .bk-m').length === 22 && document.querySelector('.bk-flow .bk-figure[data-d]:not(.unread)')`, { timeout: 30000, what: 'the 22 moves of the old game marked, its diagram read' });
+    await page.eval(`(window.ccSaid = [], true)`);
+    await page.click('.book-play');
+    await page.waitFor(`window.ccSaid.includes('9. h3')`, { timeout: 30000, what: 'the reading past the diagram' });
+    await page.waitFor(`/h3|Na5|Bc2|c5|d4|Qc7/.test(${active})`, { what: 'the board playing the moves after the diagram' });
+    await page.click('.book-play');
+    const old = await page.eval('window.ccSaid.slice(0, 8)');
+    assert(JSON.stringify(old) === '["An Old Game","Game 3","1. e4","e5","2. knight to f3","knight to c6","3. bishop to b5","a6"]', `said: ${JSON.stringify(old)}`);
+    // the PDF: its text over the page, the moves marked, a sentence clicked
+    await go(page, '#/books');
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 2`, { what: 'the books' });
+    await page.click('.book-card', 'PDF');
+    await page.waitFor(`document.querySelectorAll('.bk-pdf .textLayer .bk-m').length === 36`, { timeout: 30000, what: 'the 36 moves marked on the PDF page' });
+    await page.eval(`([...document.querySelectorAll('.bk-pdf .textLayer [data-s]')].find(e => e.textContent.includes('White wants')).click(), true)`);
+    await page.waitFor(`/White wants/.test([...document.querySelectorAll('.bk-pdf .bk-cur')].map(e => e.textContent).join(''))`, { what: 'the sentence clicked' });
+    await page.waitFor(`${active} === 'f5'`, { what: 'the position before it on the board' });
+    await page.click('.book-head button', 'Fit width');
+    await page.waitFor(`document.querySelector('.book-page.bk-wide') && document.querySelector('.bk-sheet').offsetWidth > document.querySelector('.book-page').clientWidth * 0.9`, { what: 'the page as wide as the panel' });
+  });
+
+  await step('book reader: a scanned PDF — its words read by OCR, its hatched diagrams found and read, the board showing them', async () => {
+    const dir = join(TMP, 'e2e-books');
+    await makeScannedPdf(join(dir, 'scanned-book.pdf'));
+    await go(page, '#/books');
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 2`, { what: 'the books' });
+    await page.setFiles('input[type=file][accept*=".epub"]', [join(dir, 'scanned-book.pdf')]);
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 3`, { timeout: 30000, what: 'the scanned book' });
+    await page.click('.book-card', 'Scanned');
+    const active = `document.querySelector('.book-side .movelist .active')?.innerText || ''`;
+    // its text: Tesseract's words over the picture, the moves marked (read right, though the OCR takes a 5 for an s)
+    await page.waitFor(`document.querySelectorAll('.bk-pdf .textLayer.bk-ocr .bk-m').length >= 13`, { timeout: 120000, what: 'the moves of the scanned page, read by OCR' });
+    const words = await page.eval(`document.querySelector('.bk-pdf .textLayer.bk-ocr').innerText.replace(/\\s+/g, ' ')`);
+    assert(/The pieces stand like this at the start/.test(words) && /Ruy Lopez/.test(words), `the page's words: ${words.slice(0, 200)}`);
+    // its two diagrams, read: the second one is the position the moves above it reached
+    await page.waitFor(`document.querySelectorAll('.bk-diagram').length === 2 && !document.querySelector('.bk-diagram.unread')`, { timeout: 30000, what: 'the two diagrams, read' });
+    await page.eval(`(document.querySelectorAll('.bk-diagram')[1].click(), true)`);
+    await page.waitFor(`${active} === 'a6' && document.querySelector('.bk-diagram.bk-shown') === document.querySelectorAll('.bk-diagram')[1]`, { what: 'the diagram’s position on the board, marked on the page' });
+    // read aloud from the start: the board shows the first diagram, then plays the moves (3.Bbs said as bishop to b5)
+    await page.eval(`(window.ccSaid = [], true)`);
+    await page.eval(`([...document.querySelectorAll('.bk-pdf .textLayer [data-s]')].find(e => e.textContent.includes('Scanned')).click(), true)`);
+    await page.click('.book-play');
+    await page.waitFor(`window.ccSaid.includes('3. bishop to b5')`, { timeout: 20000, what: 'a move read by OCR, said right' });
+    await page.waitFor(`/Bb5|a6|Ba4/.test(${active})`, { what: 'the board playing the moves after the diagram' });
+    await page.click('.book-play');
+    const said = await page.eval('window.ccSaid.slice(0, 4)');
+    assert(JSON.stringify(said) === '["Scanned Test Book","The pieces stand like this at the start:","1. e4","e5"]', `said: ${JSON.stringify(said)}`);
   });
 
   await step('settings: the coach’s notes, the coach programs, the data folder; no move comments, Lichess token or 1.x import', async () => {

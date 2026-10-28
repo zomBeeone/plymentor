@@ -16,7 +16,7 @@ import { formatScore } from '../chess/evalmath.js';
 import { addLineToRepertoire, removeFromRepertoire, repertoire, repertoireLines, repertoireStats } from '../training.js';
 import { createReport } from '../reports.js';
 import { describeAppState, ENGINE_SCREENS } from './state.js';
-import { toolDef, validate, HOST_TOOLS, SCREENS } from '../../../../shared/tools.js';
+import { toolDef, validate, HOST_TOOLS, SCREENS, ENGINE_LABELS } from '../../../../shared/tools.js';
 
 export class ToolError extends Error {}
 
@@ -381,7 +381,7 @@ const executors = {
     const screens = screen === 'both' || (!screen && !here) ? ['board', 'openings'] : [screen || here];
     ctx.emit({ type: 'ui', action: 'set_engine', screens, on });
     const state = on ? 'on' : 'off';
-    const where = `the ${screens.map(s => SCREENS[s].label).join(' and ')} screen${screens.length > 1 ? 's' : ''}`;
+    const where = `the ${screens.map(s => ENGINE_LABELS[s]).join(' and ')} screen${screens.length > 1 ? 's' : ''}`;
     const before = ctx.screen?.engines;
     const L = [
       before && screens.every(s => before[s] === on)

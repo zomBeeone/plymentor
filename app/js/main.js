@@ -16,9 +16,11 @@ import { Games } from './views/Games.js';
 import { Reports } from './views/Reports.js';
 import { Train } from './views/Train.js';
 import { Settings } from './views/Settings.js';
+import { Books } from './views/Books.js';
 import { LOCAL_PROFILE_ID } from '../../shared/protocol.js';
 
-// Training games against Stockfish are played on the Board (#/play opens its new-game dialog).
+// Training games against Stockfish are played on the Board (#/play opens its new-game dialog). The Book reader's tab
+// stands a little apart, on the right of the others.
 const VIEWS = [
   ['analysis', 'Board', Analysis],
   ['openings', 'Openings', Openings],
@@ -26,6 +28,7 @@ const VIEWS = [
   ['reports', 'Reports', Reports],
   ['train', 'Train', Train],
   ['settings', 'Settings', Settings],
+  ['books', 'Book reader', Books],
 ];
 
 function App() {
@@ -40,7 +43,7 @@ function App() {
       <nav class="nav">
         ${VIEWS.map(
           ([id, label]) =>
-            html`<a href=${`#/${id}`} class=${cls(view === id && 'active')}>${label}${id === 'train' && s.exercisesDue ? html`<span class="count">${s.exercisesDue}</span>` : null}</a>`,
+            html`<a href=${`#/${id}`} class=${cls(view === id && 'active', id === 'books' && 'nav-apart')}>${label}${id === 'train' && s.exercisesDue ? html`<span class="count">${s.exercisesDue}</span>` : null}</a>`,
         )}
       </nav>
       <div class="status-pills">

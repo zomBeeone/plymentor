@@ -22,6 +22,9 @@ export const SCREENS = {
   settings: { view: 'settings', label: 'Settings', tabs: [], coach: false },
 };
 
+/** The student's live Stockfish switches (engine.js), each a screen's, as the coach's tools name them. */
+export const ENGINE_LABELS = { board: 'Board', openings: 'Openings', books: 'Book reader' };
+
 export const TOOL_DEFS = [
   {
     name: 'get_board_state',
@@ -252,12 +255,16 @@ export const TOOL_DEFS = [
   {
     name: 'set_engine',
     description:
-      "Switch the student's live Stockfish analysis on or off: the evaluation bar, the engine lines and the best-move arrow they see on the Board and on the Openings screen (each screen has its own switch; get_board_state says whether it is on). Without screen: the screen the student is on — on a screen without live analysis, both. Its lines and arrow give the best move away: when you ask the student to find a move (set_board with ask_move, a quiz) while it is on, switch it off first and back on once they have answered. Switch it when they ask, too. It only changes what the student sees: your own Stockfish tools always work.",
+      "Switch the student's live Stockfish analysis on or off: the evaluation bar, the engine lines and the best-move arrow they see on the Board, on the Openings screen and on the Book reader's board (each screen has its own switch; get_board_state says whether it is on). Without screen: the screen the student is on — on a screen without live analysis, the Board's and the Openings screen's. Its lines and arrow give the best move away: when you ask the student to find a move (set_board with ask_move, a quiz) while it is on, switch it off first and back on once they have answered. Switch it when they ask, too. It only changes what the student sees: your own Stockfish tools always work.",
     input_schema: {
       type: 'object',
       properties: {
         on: { type: 'boolean', description: 'true switches it on, false off.' },
-        screen: { type: 'string', enum: ['board', 'openings', 'both'], description: "Which switch: the Board screen's, the Openings screen's or both (default: the screen the student is on)." },
+        screen: {
+          type: 'string',
+          enum: ['board', 'openings', 'books', 'both'],
+          description: "Which switch: the Board screen's, the Openings screen's, the Book reader's, or both the Board's and the Openings screen's (default: the screen the student is on).",
+        },
       },
       required: ['on'],
       additionalProperties: false,

@@ -1,5 +1,6 @@
 // The coach's voice: plays what the coach says with its speak tool. Two engines, both on the student's computer:
-// - natural: Kokoro, a neural voice (js/voice/worker.js) — sounds human; English only; a one-time ~90 MB download;
+// - natural: Kokoro, a neural voice (js/voice/worker.js) — sounds human; English only; a one-time download (~330 MB;
+//   it runs on the graphics card when there is one);
 // - browser: the system's voices (Web Speech API; on Windows the voices installed in Windows) — every language.
 import { post } from './api.js';
 import { state, setState, toast } from './store.js';
@@ -17,7 +18,7 @@ let fallbackNoted = false;
 
 let worker = null;
 let seq = 0;
-const waiting = new Map(); // id -> { resolve, reject }
+const waiting = new Map(); // id -> { resolve, reject, keep (a book's part made in advance: kept when the voice stops) }
 let loadWaiters = [];
 
 function voiceWorker() {
@@ -32,6 +33,8 @@ function voiceWorker() {
       if (m.type === 'audio') w.resolve(m);
       else w.reject(new Error(m.message));
     } else if (m.type === 'progress') for (const l of loadWaiters) l.onProgress?.(m.percent);
+    else if (m.type === 'upgrading') toast('Getting the natural voice’s faster model (about 330 MB, once). It speaks as before meanwhile.', 'info', 8000);
+    else if (m.type === 'upgraded') toast(m.device === 'webgpu' ? 'The natural voice now runs on your graphics card: no more waiting.' : 'The natural voice now uses its faster model.', 'success', 6000);
     else if (m.type === 'loaded' || m.type === 'error') {
       const list = loadWaiters;
       loadWaiters = [];
@@ -49,14 +52,20 @@ function voiceWorker() {
   return worker;
 }
 
-/** Generates speech for one piece of text: { samples, rate }. */
-function speech(text) {
+/**
+ * Generates speech for one piece of text: { samples, rate } (the promise has the request's id). speed: the voice's own
+ * by default; keep: not dropped when the voice stops (a book's part made in advance); trim: without most of the
+ * silence around it.
+ */
+function speech(text, speed, { keep = false, trim = false } = {}) {
   const id = ++seq;
-  return new Promise((resolve, reject) => {
-    waiting.set(id, { resolve, reject });
+  const p = new Promise((resolve, reject) => {
+    waiting.set(id, { resolve, reject, keep });
     const v = state.settings?.voice || {};
-    voiceWorker().postMessage({ type: 'speak', id, text, voice: v.naturalVoice, speed: v.rate });
+    voiceWorker().postMessage({ type: 'speak', id, text, voice: v.naturalVoice, speed: speed ?? v.rate, trim });
   });
+  p.id = id;
+  return p;
 }
 
 // Settings → Coach language → BCP 47 language
@@ -247,8 +256,11 @@ const setSpeaking = on => state.coachSpeaking !== on && setState({ coachSpeaking
 
 export function stopSpeaking() {
   gen++;
-  for (const w of waiting.values()) w.reject(Object.assign(new Error('stopped'), { name: 'AbortError' }));
-  waiting.clear();
+  for (const [id, w] of waiting)
+    if (!w.keep) {
+      w.reject(Object.assign(new Error('stopped'), { name: 'AbortError' }));
+      waiting.delete(id);
+    }
   try {
     source?.stop();
   } catch {
@@ -289,12 +301,160 @@ export async function say(text) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Reading a book aloud (the Book reader): short parts one after the other — each ends with a move the board plays.
+// The natural voice makes the parts ahead of the one being read (the reader asks: prepareReading), in pieces of a
+// sentence or a clause, without the silence it puts around them: the reader's own pauses go between them. Reading stops
+// when stopSpeaking() is called (pausing, or the coach starting to talk); the parts made in advance are kept for it.
+
+const aborted = () => Object.assign(new Error('stopped'), { name: 'AbortError' });
+let utterance = null; // (kept: Chrome may forget an utterance it still speaks, and its end event with it)
+
+/** The voice a book is read with: the natural one (English books) when the student chose and downloaded it. */
+export function readingEngine(lang = 'en') {
+  const v = state.settings?.voice || {};
+  return v.engine === 'natural' && v.naturalDownloaded && lang === 'en' ? 'natural' : 'browser';
+}
+
+/** A book is open: the natural voice loads (and warms up) now, so that the reading starts at once. */
+export function warmReading(lang = 'en') {
+  if (readingEngine(lang) === 'natural') voiceWorker().postMessage({ type: 'load' });
+}
+
+/** Starts a reading: the coach's voice stops; returns the reading, for readAloud. */
+export function startReading() {
+  stopSpeaking();
+  return gen;
+}
+
+const readingSpeed = speed => (state.settings?.voice?.rate || 1) * speed;
+
+/**
+ * A part of a book in pieces for the natural voice, made one after the other: cut after a sentence or a clause, 220
+ * characters at most — the first shorter, so that it comes soon (and the model reads 500 characters at most).
+ */
+export function pieces(text) {
+  const out = [];
+  let rest = text.trim();
+  while (rest) {
+    const max = out.length ? 220 : 140;
+    if (rest.length <= max) {
+      out.push(rest);
+      break;
+    }
+    const head = rest.slice(0, max + 1);
+    let cut = -1;
+    // (the last sentence's end in it — not a move number's dots: "12... h6" —, else a clause's, a dash or a comma, else
+    // a space, not too near its start)
+    for (const [re, from] of [[/(?<!\b\d{1,3}\.{0,2})[.!?…]["'”’)\]]*\s/g, 0.2], [/[;:]\s/g, 0.2], [/[,—–]\s/g, 0.2], [/\s/g, 0.35]]) {
+      for (const m of head.matchAll(re)) if (m.index >= max * from) cut = m.index + m[0].length;
+      if (cut > 0) break;
+    }
+    if (cut <= 0) cut = max;
+    out.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  return out;
+}
+
+/**
+ * Starts making the natural voice's audio for a part of a book (null with the system voice): { texts, pieces (promises
+ * of their audio), done (once all are made) }. Hand it to readAloud — or to cancelReading when it will not be said.
+ */
+export function prepareReading(text, { speed = 1, lang = 'en' } = {}) {
+  if (readingEngine(lang) !== 'natural') return null;
+  const texts = pieces(text);
+  const p = { texts, pieces: texts.map(t => speech(t, readingSpeed(speed), { keep: true, trim: true })), done: false };
+  for (const piece of p.pieces) piece.catch(() => {});
+  Promise.all(p.pieces).then(() => (p.done = true), () => {});
+  return p;
+}
+
+/** A part made in advance that will not be said: the voice does not make what it has not made yet. */
+export function cancelReading(prepared) {
+  if (!prepared) return;
+  const ids = prepared.pieces.map(p => p.id).filter(id => waiting.has(id));
+  for (const id of ids) {
+    waiting.get(id).reject(aborted());
+    waiting.delete(id);
+  }
+  if (ids.length) voiceWorker().postMessage({ type: 'cancel', ids });
+}
+
+/** Plays a piece of the natural voice after `pause` seconds; resolves when it has been played (or stopped). */
+function playPiece(data, pause) {
+  const ac = audio();
+  const buf = ac.createBuffer(1, data.samples.length, data.rate);
+  buf.copyToChannel(data.samples, 0);
+  return new Promise(resolve => {
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    src.connect(ac.destination);
+    src.onended = resolve;
+    source = src;
+    src.start(ac.currentTime + Math.max(0, pause));
+  });
+}
+
+/**
+ * Says one part of a book; resolves once it has been said, rejects with an AbortError when the reading has stopped.
+ * pause: the silence before it, in seconds at 1× (the natural voice's; the system voice keeps its own).
+ */
+export async function readAloud(text, { reading, speed = 1, lang = 'en', prepared = null, pause = 0 }) {
+  if (reading !== gen) throw aborted();
+  if (readingEngine(lang) === 'natural') {
+    const p = prepared || prepareReading(text, { speed, lang });
+    try {
+      const rate = readingSpeed(speed);
+      for (const [i, piece] of p.pieces.entries()) {
+        const data = await piece;
+        if (reading !== gen) throw aborted();
+        // (between the pieces of a part: a sentence's pause, or a clause's)
+        const before = i === 0 ? pause : /[.!?…]["'”’)\]]*$/.test(p.texts[i - 1]) ? 0.3 : 0.15;
+        await playPiece(data, before / rate);
+        if (reading !== gen) throw aborted();
+      }
+      return;
+    } catch (e) {
+      cancelReading(p);
+      if (reading !== gen || e.name === 'AbortError') throw aborted();
+      if (!fallbackNoted) {
+        fallbackNoted = true;
+        toast(`The natural voice is not available (${e.message}); using the system voice.`, 'error', 7000);
+      }
+    }
+  }
+  const synth = window.speechSynthesis;
+  if (!synth) throw new Error('This computer has no voices for reading aloud.');
+  await new Promise((resolve, reject) => {
+    const u = new SpeechSynthesisUtterance(text);
+    const voice = readingVoice(lang);
+    if (voice) u.voice = voice;
+    u.lang = voice?.lang || lang;
+    u.rate = Math.max(0.5, Math.min(4, readingSpeed(speed)));
+    u.onend = u.onerror = () => (reading === gen ? resolve() : reject(aborted()));
+    utterance = u;
+    synth.speak(u);
+  });
+}
+
+function readingVoice(lang) {
+  const all = window.speechSynthesis?.getVoices() || [];
+  const want = state.settings?.voice?.browserVoice;
+  const chosen = want && all.find(v => v.name === want);
+  if (chosen && (chosen.lang || '').toLowerCase().startsWith(lang)) return chosen;
+  return browserVoices(lang, all)[0] || chosen || null;
+}
+
 /** The desktop window may play sound before the first click (its autoplay policy, see desktop/main.js). */
 const mayPlay = () => !!window.plymentor || !navigator.userActivation || navigator.userActivation.hasBeenActive;
 
+/** In the Book reader the book's voice reads: the coach does not talk there (its answers stay written in its panel). */
+const quietHere = () => /^#\/books(?:[/?]|$)/.test(globalThis.location?.hash || '');
+
 /** The coach's speak tool. */
 export function coachSays(ev) {
-  if (!state.settings?.voice?.enabled || !ev.text) return;
+  if (!state.settings?.voice?.enabled || !ev.text || quietHere()) return;
   if (!mayPlay()) {
     pending = { text: ev.text, at: Date.now() };
     if (!blockedNoted) {
@@ -312,7 +472,7 @@ export function initVoice() {
     if (ctx?.state === 'suspended') ctx.resume().catch(() => {});
     const p = pending;
     pending = null;
-    if (p && Date.now() - p.at < 90_000 && state.settings?.voice?.enabled) setTimeout(() => say(p.text), 0);
+    if (p && Date.now() - p.at < 90_000 && state.settings?.voice?.enabled && !quietHere()) setTimeout(() => say(p.text), 0);
   };
   window.addEventListener('pointerdown', unlock, true);
   window.addEventListener('keydown', unlock, true);

@@ -3,15 +3,16 @@ import { useEffect, useState } from '../vendor/preact.js';
 import { send, subscribe } from './local.js';
 import { stored, store } from './util.js';
 
-// The student's Stockfish switches: the live analysis on the Board and on the Openings screen, each kept across starts.
-// The screens show them; the coach reads them (get_board_state) and turns them (set_engine).
-const SWITCH_KEYS = { board: 'analysis.engine', openings: 'openings.engine' };
-const switches = { board: stored(SWITCH_KEYS.board, true), openings: stored(SWITCH_KEYS.openings, true) };
+// The student's Stockfish switches: the live analysis on the Board, on the Openings screen and on the Book reader's
+// board, each kept across starts. The screens show them; the coach reads them (get_board_state) and turns them
+// (set_engine).
+const SWITCH_KEYS = { board: 'analysis.engine', openings: 'openings.engine', books: 'books.engine' };
+const switches = Object.fromEntries(Object.entries(SWITCH_KEYS).map(([screen, key]) => [screen, stored(key, true)]));
 const switchSubs = new Set();
 
 export const engineSwitches = () => ({ ...switches });
 
-/** Turns the switch of `screen` (board or openings); returns whether it changed. */
+/** Turns the switch of `screen` (board, openings or books); returns whether it changed. */
 export function setEngineSwitch(screen, on) {
   if (!Object.hasOwn(switches, screen) || switches[screen] === on) return false;
   switches[screen] = on;

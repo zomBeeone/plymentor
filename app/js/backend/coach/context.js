@@ -13,6 +13,7 @@ const MODES = {
   exercise: 'training exercise',
   lesson: 'lesson',
   report: 'report',
+  book: 'book reader',
 };
 
 /**

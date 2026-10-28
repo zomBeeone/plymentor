@@ -48,6 +48,58 @@ cpSync(join(nm, 'stockfish', 'Copying.txt'), join(web, 'engine', 'COPYING.txt'))
 mkdirSync(join(web, 'js'), { recursive: true });
 cpSync(join(nm, '@sqlite.org', 'sqlite-wasm', 'dist', 'sqlite3.wasm'), join(web, 'js', 'sqlite3.wasm'));
 
+// pdf.js for the Book reader's PDF books (loaded when a PDF is opened): the library and its worker next to the bundles,
+// its image decoders (WebAssembly, with their fallbacks) and colour profile. (Not its CMaps and fonts: the system's
+// fonts stand in for the few PDFs that do not embed theirs.)
+const pdfjs = join(nm, 'pdfjs-dist');
+cpSync(join(pdfjs, 'build', 'pdf.min.mjs'), join(web, 'js', 'pdf.mjs'));
+cpSync(join(pdfjs, 'build', 'pdf.worker.min.mjs'), join(web, 'js', 'pdf.worker.mjs'));
+mkdirSync(join(web, 'pdf', 'wasm'), { recursive: true });
+for (const f of readdirSync(join(pdfjs, 'wasm')).filter(f => /^(jbig2|openjpeg|qcms)|^LICENSE/.test(f))) cpSync(join(pdfjs, 'wasm', f), join(web, 'pdf', 'wasm', f));
+cpSync(join(pdfjs, 'iccs'), join(web, 'pdf', 'iccs'), { recursive: true });
+cpSync(join(pdfjs, 'LICENSE'), join(web, 'pdf', 'LICENSE.txt'));
+
+// Tesseract for the Book reader's scanned books (loaded the first time a book has a scanned page): Tesseract.js, its
+// worker, its WebAssembly build of Tesseract (SIMD, the LSTM engine only: the script and its .wasm, which it fetches
+// from its worker's folder — the build with the WebAssembly inside the script fetches it as a data: URL, which the
+// window's security policy refuses) and the English model, with their licences.
+const ocr = join(web, 'ocr');
+mkdirSync(ocr, { recursive: true });
+cpSync(join(nm, 'tesseract.js', 'dist', 'tesseract.esm.min.js'), join(ocr, 'tesseract.mjs'));
+cpSync(join(nm, 'tesseract.js', 'dist', 'worker.min.js'), join(ocr, 'worker.min.js'));
+for (const f of ['tesseract-core-simd-lstm.js', 'tesseract-core-simd-lstm.wasm']) cpSync(join(nm, 'tesseract.js-core', f), join(ocr, f));
+cpSync(join(nm, '@tesseract.js-data', 'eng', '4.0.0_best_int', 'eng.traineddata.gz'), join(ocr, 'eng.traineddata.gz'));
+const LEPTONICA = `Leptonica: Copyright (C) 2001-2024 Leptonica. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the
+following conditions are met:
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following
+   disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following
+   disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL ANY CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.`;
+writeFileSync(
+  join(ocr, 'LICENSE.txt'),
+  [
+    'Tesseract.js (tesseract.mjs, worker.min.js): Apache-2.0',
+    readFileSync(join(nm, 'tesseract.js', 'LICENSE.md'), 'utf8'),
+    'Bundled in tesseract.mjs and worker.min.js:',
+    readFileSync(join(nm, 'tesseract.js', 'dist', 'worker.min.js.LICENSE.txt'), 'utf8'),
+    'tesseract.js-core (tesseract-core-simd-lstm.js and .wasm: Tesseract, with Leptonica, libpng and zlib, in WebAssembly): Apache-2.0',
+    readFileSync(join(nm, 'tesseract.js-core', 'LICENSE'), 'utf8'),
+    LEPTONICA,
+    'libpng: the PNG Reference Library License version 2 (http://www.libpng.org/pub/png/src/libpng-LICENSE.txt). zlib: the zlib licence (https://zlib.net/zlib_license.html).',
+    'eng.traineddata.gz: the English model of Tesseract (tesseract-ocr/tessdata_best, Apache-2.0, as above), packaged by @tesseract.js-data/eng (MIT).',
+  ].join('\n\n'),
+);
+
 // onnxruntime-web (used by the natural voice), served by the app itself.
 mkdirSync(join(web, 'voice'), { recursive: true });
 const ortDir = join(nm, '@huggingface', 'transformers', 'dist');
@@ -152,6 +204,8 @@ await Promise.all([
   build({ ...browser, entryPoints: { backend: join(root, 'app/js/backend/worker.js') } }),
   // the ONNX runtime's wasm files are copied to /voice/ above
   build({ ...browser, entryPoints: { voice: join(root, 'app/js/voice/worker.js') }, external: ['onnxruntime-node', 'sharp'] }),
+  // the Book reader's worker for the diagrams of scanned pages
+  build({ ...browser, entryPoints: { bookscan: join(root, 'app/js/books/worker.js') } }),
   build({ ...node, format: 'esm', entryPoints: [join(root, 'desktop/main.js')], outfile: join(out, 'desktop', 'main.mjs'), external: ['electron', 'node-pty'], banner: { js: requireShim }, plugins: [optionalPackages] }),
   build({ ...node, format: 'cjs', entryPoints: [join(root, 'desktop/mcp.js')], outfile: join(out, 'desktop', 'mcp.cjs') }),
   // the game database's utility processes: unpacking and indexing, and reading it
