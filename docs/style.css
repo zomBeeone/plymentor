@@ -49,6 +49,7 @@ h2 { margin: 0 0 24px; font-size: clamp(26px, 3.6vw, 34px); letter-spacing: -0.0
 .features { padding-top: 84px; padding-bottom: 88px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 18px; }
 .grid article { padding: 22px 24px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+.grid article.wide { grid-column: 1 / -1; }
 .grid h3 { margin: 0 0 8px; font-size: 19px; }
 .grid p { margin: 0; }
 
