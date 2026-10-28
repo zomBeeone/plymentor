@@ -38,7 +38,9 @@ function defaults() {
       liveMaxSeconds: 60,
       agentThreads: Math.max(1, Math.min(4, Math.floor(cores / 4))),
       agentHash: 32,
-      batchWorkers: Math.max(1, Math.min(4, Math.floor(cores / 4))),
+      // the batch analysis: most of the computer (its positions are searched to a number of nodes, one per worker:
+      // more workers, sooner done — the student, or their coach, is waiting for it)
+      batchWorkers: Math.max(1, Math.min(8, cores - 2)),
       batchThreads: 1,
       batchHash: 16,
       batchPreset: 'standard',
@@ -117,7 +119,18 @@ function normalize(s) {
 }
 
 export function loadSettings() {
-  settings = normalize(merge(defaults(), kvGet('settings', {})));
+  const stored = kvGet('settings', {});
+  settings = normalize(merge(defaults(), stored));
+  // (1.0.1: the batch analysis got more workers. Settings still at the number before — never changed — take the
+  // new one, once.)
+  if (kvGet('engineDefaults', 1) < 2) {
+    const cores = cpuThreads();
+    if (stored.engine?.batchWorkers === Math.max(1, Math.min(4, Math.floor(cores / 4)))) {
+      settings = normalize(merge(settings, { engine: { batchWorkers: defaults().engine.batchWorkers } }));
+      kvSet('settings', settings);
+    }
+    kvSet('engineDefaults', 2);
+  }
   return settings;
 }
 

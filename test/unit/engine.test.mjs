@@ -4,10 +4,10 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { openBackend, closeBackend, fixture, STOCKFISH } from './setup.mjs';
-import { get, all } from '../../app/js/backend/db.js';
+import { get, all, kvGet, kvSet } from '../../app/js/backend/db.js';
 import { PgnImporter, deleteGames } from '../../app/js/backend/games.js';
-import { updateSettings } from '../../app/js/backend/settings.js';
-import { evaluate, evaluateMove, playMove, live } from '../../app/js/backend/engine/pool.js';
+import { updateSettings, loadSettings, cpuThreads } from '../../app/js/backend/settings.js';
+import { evaluate, evaluateMove, playMove, live, runningEngines } from '../../app/js/backend/engine/pool.js';
 import { jobs } from '../../app/js/backend/analysis/batch.js';
 import { handle } from '../../app/js/backend/router.js';
 import { executeTool } from '../../app/js/backend/coach/tools.js';
@@ -50,6 +50,52 @@ test('move judgement: a blunder and the best move', { skip }, async () => {
   const best = await evaluateMove('rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2', 'd8h4', { depth: 8 });
   assert.ok(['best', 'great'].includes(best.classification));
   await assert.rejects(evaluateMove('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', 'e2e5'), e => e.status === 400);
+});
+
+test('analyses asked together run side by side; one made is answered again at once; a move among its lines is judged from it', { skip }, async () => {
+  const fens = [
+    'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3',
+    'rnbqkb1r/pppp1ppp/5n2/4p3/2B1P3/8/PPPP1PPP/RNBQK1NR w KQkq - 2 3',
+    'rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2',
+  ];
+  const results = await Promise.all(fens.map(fen => evaluate(fen, { depth: 12, multipv: 3 })));
+  assert.ok(results.every(r => r.lines.length === 3 && !r.cached));
+  assert.ok(runningEngines().filter(r => r.startsWith('agent')).length >= 2, `the agent engine's helpers: ${runningEngines()}`);
+  // the same position, as deep or less, as many lines or fewer: at once — deeper, searched again
+  const again = await evaluate(fens[0], { depth: 10, multipv: 2 });
+  assert.equal(again.cached, true);
+  assert.deepEqual(again.lines.map(l => l.pv[0]), results[0].lines.slice(0, 2).map(l => l.pv[0]));
+  assert.ok(!(await evaluate(fens[0], { depth: 13, multipv: 2 })).cached);
+  // the engine's second choice: its score after the move and the reply are those of its line in the same search
+  const line = results[1].lines[1];
+  const m = await evaluateMove(fens[1], line.pv[0], { depth: 12 });
+  assert.deepEqual(m.scoreAfter, line.score);
+  assert.equal(m.reply.uci, line.pv[1]);
+});
+
+test('the batch analysis’s workers: never changed, the new default, once; changed, kept', async () => {
+  const cores = cpuThreads();
+  const before = Math.max(1, Math.min(4, Math.floor(cores / 4)));
+  const now = Math.max(1, Math.min(8, cores - 2));
+  const saved = kvGet('settings');
+  const mark = kvGet('engineDefaults');
+  const stored = engine => kvSet('settings', { ...saved, engine: { ...saved.engine, ...engine } });
+  try {
+    stored({ batchWorkers: before });
+    kvSet('engineDefaults', 1);
+    assert.equal(loadSettings().engine.batchWorkers, now);
+    // the old number chosen afterwards stays
+    stored({ batchWorkers: before });
+    assert.equal(loadSettings().engine.batchWorkers, before);
+    // changed before: kept
+    stored({ batchWorkers: 5 });
+    kvSet('engineDefaults', 1);
+    assert.equal(loadSettings().engine.batchWorkers, 5);
+  } finally {
+    kvSet('settings', saved);
+    kvSet('engineDefaults', mark ?? 2);
+    loadSettings();
+  }
 });
 
 test('sparring moves at different strengths are legal', { skip }, async () => {

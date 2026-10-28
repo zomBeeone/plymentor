@@ -234,35 +234,40 @@ export async function generateExercises({ names, gameIds, max = 20, onProgress }
   const candidates = st.critical.filter(c => c.judgement !== 'inaccuracy' && c.best && c.fen);
   let created = 0;
   let checked = 0;
-  for (const c of candidates) {
-    if (created >= max) break;
-    if (get('SELECT id FROM exercises WHERE fen = ?', c.fen)) continue;
-    checked++;
-    onProgress?.({ checked, created });
-    const ev = await evaluate(c.fen, { depth: 18, multipv: 2 });
-    const [l1, l2] = ev.lines;
-    if (!l1?.pv?.length) continue;
-    const pos = posFromFen(c.fen);
-    const sign = pos.turn === 'white' ? 1 : -1;
-    const gap = l2 ? (sign * (winningChances(l1.score) - winningChances(l2.score))) / 2 : 1;
-    if (gap < 0.12) continue;
-    const pv = l1.pv.slice(0, 5);
-    const sans = l1.san.slice(0, 5);
-    const side = pos.turn === 'white' ? 'White' : 'Black';
-    const goal = l1.score.mate !== undefined && l1.score.mate * sign > 0 ? 'and mate' : winningChances(l1.score) * sign > 0.5 ? 'and win' : 'and find the best move';
-    run(
-      `INSERT OR IGNORE INTO exercises (fen, solution, prompt, themes, source, game_id, ply, data, due, created_at) VALUES (?, ?, ?, ?, 'mistake', ?, ?, ?, ?, ?)`,
-      c.fen,
-      JSON.stringify({ ucis: pv, sans }),
-      `${side} to move ${goal}. (In the game you played ${c.san}.)`,
-      JSON.stringify(c.motifs.filter(t => t !== 'positional')),
-      c.gameId,
-      c.ply,
-      JSON.stringify({ played: c.san, judgement: c.judgement, game: c.game, phase: c.phase }),
-      now(),
-      now(),
-    );
-    created++;
+  const seen = new Set();
+  const todo = candidates.filter(c => !seen.has(c.fen) && seen.add(c.fen) && !get('SELECT id FROM exercises WHERE fen = ?', c.fen));
+  // (four at a time: the agent engine and its helpers check them side by side)
+  for (let i = 0; i < todo.length && created < max; i += 4) {
+    const batch = todo.slice(i, i + 4);
+    const evs = await Promise.all(batch.map(c => evaluate(c.fen, { depth: 18, multipv: 2 })));
+    for (const [k, c] of batch.entries()) {
+      if (created >= max) break;
+      checked++;
+      onProgress?.({ checked, created });
+      const [l1, l2] = evs[k].lines;
+      if (!l1?.pv?.length) continue;
+      const pos = posFromFen(c.fen);
+      const sign = pos.turn === 'white' ? 1 : -1;
+      const gap = l2 ? (sign * (winningChances(l1.score) - winningChances(l2.score))) / 2 : 1;
+      if (gap < 0.12) continue;
+      const pv = l1.pv.slice(0, 5);
+      const sans = l1.san.slice(0, 5);
+      const side = pos.turn === 'white' ? 'White' : 'Black';
+      const goal = l1.score.mate !== undefined && l1.score.mate * sign > 0 ? 'and mate' : winningChances(l1.score) * sign > 0.5 ? 'and win' : 'and find the best move';
+      run(
+        `INSERT OR IGNORE INTO exercises (fen, solution, prompt, themes, source, game_id, ply, data, due, created_at) VALUES (?, ?, ?, ?, 'mistake', ?, ?, ?, ?, ?)`,
+        c.fen,
+        JSON.stringify({ ucis: pv, sans }),
+        `${side} to move ${goal}. (In the game you played ${c.san}.)`,
+        JSON.stringify(c.motifs.filter(t => t !== 'positional')),
+        c.gameId,
+        c.ply,
+        JSON.stringify({ played: c.san, judgement: c.judgement, game: c.game, phase: c.phase }),
+        now(),
+        now(),
+      );
+      created++;
+    }
   }
   return { created, checked };
 }

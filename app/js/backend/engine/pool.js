@@ -1,9 +1,10 @@
-// Engine roles: live (board analysis), agent (coach tools + move judgement), batch workers, play (sparring).
+// Engine roles: live (board analysis), agent (coach tools + move judgement — with helpers beside it, agent-2…, when
+// several are asked for at once), batch workers, play (sparring).
 // Each role is its own Stockfish (WebAssembly, in a Web Worker): multi-threaded when the page is cross-origin
 // isolated (SharedArrayBuffer available), single-threaded otherwise.
 import { Emitter } from '../emitter.js';
 import { UciEngine, workerTransport } from './uci.js';
-import { getSettings } from '../settings.js';
+import { getSettings, cpuThreads } from '../settings.js';
 import { run, get } from '../db.js';
 import { posFromFen, fenOf, keyOf, moveFromUci, uciOf, ucisToSans, formatLine, outcomeText } from '../chess/core.js';
 import { makeSan } from 'chessops/san';
@@ -27,6 +28,8 @@ export function engineOptions(role) {
   const s = getSettings().engine;
   if (role === 'live') return { Threads: s.liveThreads, Hash: s.liveHash, UCI_ShowWDL: 'true' };
   if (role === 'agent') return { Threads: s.agentThreads, Hash: s.agentHash, UCI_ShowWDL: 'true' };
+  // (a helper: as many threads as the agent engine — the four together no more than the computer has)
+  if (role.startsWith('agent-')) return { Threads: Math.max(1, Math.min(s.agentThreads, Math.floor((cpuThreads() - s.agentThreads) / 3))), Hash: s.agentHash, UCI_ShowWDL: 'true' };
   if (role === 'play') return { Threads: 1, Hash: 16 };
   return { Threads: s.batchThreads, Hash: s.batchHash };
 }
@@ -55,6 +58,9 @@ const runningEngine = role => {
   const e = engines.get(role)?.engine;
   return e?.alive ? e : null;
 };
+
+/** The roles whose engine runs now ("agent", "agent-2", "batch-1"…). */
+export const runningEngines = () => [...engines.keys()].filter(runningEngine);
 
 export function stopEngine(role) {
   const entry = engines.get(role);
@@ -214,8 +220,74 @@ export function cacheEval(key, line, depth, nodes) {
   );
 }
 
+// ---------------------------------------------------------------------------------------------
+// The agent's searches (the coach's analyses, the judgement of the student's moves): on the agent engine — or, while
+// it is busy, on a helper beside it (agent-2…agent-4: a quarter of its threads; started when first needed, stopped
+// after two idle minutes), so that the analyses the coach asks for together run side by side, not one after the other.
+
+const AGENT_ROLES = ['agent', 'agent-2', 'agent-3', 'agent-4'];
+const agentBusy = new Set();
+const agentWaiting = []; // { params, resolve, reject }
+const helperTimers = new Map();
+const brokenHelpers = new Set(); // (a helper that could not start is not used again)
+
+function agentSearch(params) {
+  return new Promise((resolve, reject) => {
+    agentWaiting.push({ params, resolve, reject });
+    nextAgentSearch();
+  });
+}
+
+function nextAgentSearch() {
+  while (agentWaiting.length) {
+    const role = AGENT_ROLES.find(r => !agentBusy.has(r) && !brokenHelpers.has(r));
+    if (!role) return;
+    const job = agentWaiting.shift();
+    agentBusy.add(role);
+    clearTimeout(helperTimers.get(role));
+    let started = false;
+    getEngine(role)
+      .then(engine => {
+        started = true;
+        return engine.search(job.params);
+      })
+      .then(job.resolve, err => {
+        if (role !== 'agent' && !started) {
+          brokenHelpers.add(role);
+          agentWaiting.unshift(job); // (the main engine or another helper takes it)
+        } else job.reject(err);
+      })
+      .finally(() => {
+        agentBusy.delete(role);
+        if (role !== 'agent') helperTimers.set(role, setTimeout(() => !agentBusy.has(role) && stopEngine(role), 120_000));
+        nextAgentSearch();
+      });
+  }
+}
+
+// The agent's analyses of the last 300 positions, kept: asked again — as deep or less, as many lines or fewer —, the
+// answer comes at once. (A position's best line is also kept in the database: evals.)
+const recent = new Map(); // position key → { depth, multipv, lines, bestmove }, the latest last
+
+function remembered(key, depth, multipv) {
+  const r = recent.get(key);
+  if (!r || r.depth < depth || r.multipv < multipv) return null;
+  recent.delete(key);
+  recent.set(key, r);
+  return r;
+}
+
+function remember(key, entry) {
+  const prev = recent.get(key);
+  if (prev && prev.depth >= entry.depth && prev.multipv >= entry.multipv) return;
+  recent.delete(key);
+  recent.set(key, entry);
+  if (recent.size > 300) recent.delete(recent.keys().next().value);
+}
+
 /**
- * One-shot analysis on the agent engine. Returns lines with SAN. Uses the cache for single-line requests.
+ * One-shot analysis on the agent engine. Returns lines with SAN. Uses the cache for single-line requests, and the
+ * analyses kept of the last positions for any as deep with as many lines.
  * maxTime (ms) caps a depth search: with WebAssembly a deep search can take long, and the best line so far is used.
  */
 export async function evaluate(fen, { depth = 18, multipv = 1, movetime, nodes, maxTime = 20_000 } = {}) {
@@ -226,16 +298,20 @@ export async function evaluate(fen, { depth = 18, multipv = 1, movetime, nodes, 
     return { fen: fenOf(pos), gameOver: over, lines: [{ multipv: 1, depth: 0, score, pv: [], san: [] }], bestmove: null };
   }
   const key = keyOf(pos);
+  multipv = Math.max(1, Math.min(5, multipv));
   if (multipv === 1 && !movetime && !nodes) {
     const c = cachedEval(key);
     if (c && c.depth >= depth && c.pv.length)
       return { fen: fenOf(pos), cached: true, bestmove: c.best, lines: [{ multipv: 1, depth: c.depth, score: c.score, pv: c.pv, san: ucisToSans(pos, c.pv) }] };
   }
-  const engine = await getEngine('agent');
-  const result = await engine.search({ fen: fenOf(pos), multipv: Math.max(1, Math.min(5, multipv)), depth, movetime: movetime || (nodes ? undefined : maxTime), nodes });
+  const kept = !movetime && !nodes && remembered(key, depth, multipv);
+  if (kept) return { fen: fenOf(pos), cached: true, bestmove: kept.bestmove, lines: kept.lines.slice(0, multipv) };
+  const result = await agentSearch({ fen: fenOf(pos), multipv, depth, movetime: movetime || (nodes ? undefined : maxTime), nodes });
   const lines = result.lines.map(l => ({ ...l, san: ucisToSans(pos, l.pv) }));
   if (lines[0] && !lines[0].bound) cacheEval(key, lines[0], lines[0].depth, lines[0].nodes);
   if (!lines.length) throw new Error('Stockfish returned no analysis for this position.');
+  // (as deep as its least deep line: a search stopped by maxTime is kept for what it reached)
+  if (!movetime && !nodes) remember(key, { depth: Math.min(...lines.map(l => l.depth || 0)), multipv, lines, bestmove: result.bestmove });
   return { fen: fenOf(pos), bestmove: result.bestmove, lines };
 }
 
@@ -263,9 +339,13 @@ export async function evaluateMove(fen, moveUci, { depth = 18, maxTime = 12_000 
   const before = await evaluate(fenOf(pos), { depth, multipv: 3, maxTime });
   const afterPos = pos.clone();
   afterPos.play(move);
-  const after = await evaluate(fenOf(afterPos), { depth, multipv: 1, maxTime });
-  const best = before.lines[0];
   const inLines = before.lines.find(l => l.pv[0] === uci);
+  // (the move is one of the engine's lines, searched as deep: its score and the reply in it — no second search)
+  const after =
+    inLines && !inLines.bound && inLines.pv.length > 1
+      ? { lines: [{ multipv: 1, depth: inLines.depth, score: inLines.score, pv: inLines.pv.slice(1), san: inLines.san.slice(1) }] }
+      : await evaluate(fenOf(afterPos), { depth, multipv: 1, maxTime });
+  const best = before.lines[0];
   const afterScore = after.lines[0]?.score ?? inLines?.score;
   const bestScore = best.score;
   const second = before.lines[1];
