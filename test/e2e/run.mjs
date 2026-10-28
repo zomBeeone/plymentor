@@ -396,6 +396,8 @@ async function main() {
   await step('train: exercises — the one on the board highlighted in the deck, the ones done marked', async () => {
     await go(page, '#/train');
     await page.waitFor(`document.body.innerText.includes('Generate from my games')`, { what: 'exercises' });
+    // (the coach's terminal moves into this screen's panel once the screen is there)
+    await page.waitFor(`[...document.querySelectorAll('.xterm-helper-textarea')].some(t => t.offsetParent)`, { what: 'the coach panel' });
     await ask(page, 'Please make me two exercises');
     await page.waitFor(`/create_exercise: ok ok/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 30000, what: 'the coach’s answer' });
     const item = name => `[...document.querySelectorAll('.ex-list .item')].find(i => i.innerText.includes(${JSON.stringify(name)}))`;
