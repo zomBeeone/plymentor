@@ -6,7 +6,8 @@ import { fontBoards, findBoards, findPictureBoard, findFigureBoards, grayFrom, p
 import { pageText, pictureBoxes, diagramShaped } from '../../app/js/books/pdf.js';
 import { ocrText } from '../../app/js/books/ocr.js';
 import { findMoves, findSentences, spokenParts } from '../../app/js/books/text.js';
-import { BookMoves } from '../../app/js/books/moves.js';
+import { BookMoves, sideMarked } from '../../app/js/books/moves.js';
+import { posFromFen } from '../../app/js/chess.js';
 import { drawBoard, drawPlainBoard, drawCoordinates, drawText, blankPage, pieceSquares } from './diagram-picture.mjs';
 
 // A PDF page's text items: a line of text, a board in a chess font (each row twice, in two fonts, as some books set
@@ -81,6 +82,10 @@ test('boards in the other chess fonts: TeX’s, with its coordinates (not read a
   page = pageText({ items: alpha }, viewport);
   assert.equal(page.text, 'The position:\n');
   assert.deepEqual(page.diagrams.map(d => d.placement), [fen]);
+  // an opening's board: rows of pieces only, no empty square in them, are rows of it too
+  const start = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
+  const opening = fontRows(start, 'tex').map((r, i) => item(r, 94, 400 - i * 14, { height: 14, width: 112, fontName: 'skak' }));
+  assert.deepEqual(pageText({ items: opening }, viewport).diagrams.map(d => d.placement), [start]);
 });
 
 test('a PDF page’s pictures: where it draws them, and the ones shaped like a diagram (one cut in strips joined)', () => {
@@ -155,6 +160,59 @@ test('the board follows the diagrams: a game from one, its side and move number,
     ['king to g7', 1, undefined],
     ['2. king to f3', 2, undefined],
   ]);
+});
+
+test('the board follows the diagrams: the side the book marks, a caption, the position just read, the other side’s what-if, a puzzle’s solution far after it', () => {
+  // the side to move as books mark it: on a line of its own, under the diagram's number, a scan's "w" over it, a
+  // caption, before the first move — not two captions on one line, nor words in a sentence
+  assert.equal(sideMarked('Kasparian 1946\n', '\n\n\n9-63\nW\nFor the time being'), 'w');
+  assert.equal(sideMarked('', '\n1-36\n1/5\nB?\nThe correspondence'), 'b');
+  assert.equal(sideMarked('in the next there are seven.\nw\n', 'This position arose'), 'w');
+  assert.equal(sideMarked('', '\nDIAGRAM 14. White to play\nSpassky'), 'w');
+  assert.equal(sideMarked('', '\nDIAGRAM 14. White to play DIAGRAM 15. Black to play\n'), null);
+  assert.equal(sideMarked('', '\n10-11\nB?23...Ke4 24.Nxf6+'), 'b');
+  assert.equal(sideMarked('', '\nWe have reached the reciprocal zugzwang: Black to move loses here.'), null);
+  // a W under the diagram, though the moves after it begin with Black's: what would happen if Black were to move,
+  // a game of its own; then White's moves, back in the diagram's game
+  let book = new BookMoves();
+  let u = follow(book, 'A study.\nW\nIf Black were to move, 1...Kb8 2.Rh8# would follow. Here 1.Kc6 Kb8 2.Rh8+ Ka7 3.Kc7 wins.', [{ at: 9, placement: 'k7/8/1K6/8/8/8/8/7R', font: true }]);
+  const study = u.diagrams[0];
+  assert.equal(study.node.fen, 'k7/8/1K6/8/8/8/8/7R w - - 0 1');
+  assert.equal(u.moves[0].tree.root.fen, 'k7/8/1K6/8/8/8/8/7R b - - 0 1');
+  assert.ok(posFromFen(u.moves[1].node.fen).isCheckmate());
+  assert.deepEqual([u.moves[2].tree, u.moves[2].node.parent], [study.tree, study.node]);
+  assert.ok(u.moves.every(m => m.node && !m.shown));
+  // the what-if after White's line: from the diagram's position, the first of its game
+  u = follow(new BookMoves(), 'A study.\nW\nHere 1.Kc7 Ka7 2.Ra1+ wins. With Black to move, 1...Kb8 2.Rh8# would follow.', [{ at: 9, placement: 'k7/8/1K6/8/8/8/8/7R', font: true }]);
+  assert.equal(u.moves[3].tree.root.fen, 'k7/8/1K6/8/8/8/8/7R b - - 0 1');
+  assert.ok(u.moves.every(m => m.node && !m.shown));
+  // a caption under the diagram, "Position after: 2... Nc6": the move that led to it, said again; the game goes on
+  // from it with White to move
+  book = new BookMoves();
+  const ruy = 'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R';
+  u = follow(book, 'After the second moves:\nPosition after: 2... Nc6\n3. Bb5 a6 4. Ba4', [{ at: 24, placement: ruy, font: true }]);
+  assert.equal(u.diagrams[0].node.fen, `${ruy} w KQkq - 0 3`);
+  assert.deepEqual([u.moves[0].restated, u.moves[0].node], [true, u.diagrams[0].node]);
+  assert.equal(u.moves[1].node.parent, u.diagrams[0].node);
+  assert.ok(u.moves.slice(1).every(m => m.node && !m.shown));
+  // the position the text just reached: the same game, though the words after it say "Black to move"
+  book = new BookMoves();
+  u = follow(book, "1.e4 e5 2.Nf3 Nc6\nBlack to move would play 3...a6 here, but it is White's move: 3.Bb5 a6", [{ at: 18, placement: ruy, font: true }]);
+  assert.equal(u.diagrams[0].node, u.moves[3].node);
+  assert.equal(u.moves.find(m => m.san === 'Bb5').node.parent, u.moves[3].node);
+  // puzzles numbered over their diagrams, their solutions far after them: each from its own diagram (Black's too,
+  // whose side to move was a guess) — "1 1.Rd8#" is puzzle 1's first move, not an 11th
+  book = new BookMoves();
+  const puzzles = follow(book, 'Mate in one\n1\n\n2\n', [
+    { at: 14, placement: '6k1/5ppp/8/8/8/8/5PPP/3R2K1', font: true },
+    { at: 17, placement: '3r2k1/5ppp/8/8/8/8/5PPP/6K1', font: true },
+  ]);
+  u = follow(book, 'Solutions\n1 1.Rd8#\n2 1...Rd1#\n');
+  assert.deepEqual(
+    u.moves.map(m => [m.num, m.side, m.node.parent, m.tree]),
+    puzzles.diagrams.map((d, i) => [1, i ? 'black' : 'white', d.node, d.tree]),
+  );
+  assert.ok(u.moves.every(m => posFromFen(m.node.fen).isCheckmate()));
 });
 
 test('a scanned page: its words from the OCR, in lines and paragraphs, without the running head, the folio and the labels of a diagram', () => {

@@ -1,21 +1,32 @@
 // The text of a chess book, for the Book reader: the moves written in it — the way books write them: move numbers
-// ("12." for White, "12..." or "12…" for Black), letters or figurines (Nf3, ♘f3), x or : for captures, castling with O
-// or 0, long algebraic (Ng1-f3), check signs and annotation glyphs; older books' descriptive notation: descriptive.js —,
-// its sentences, and what the voice says for them.
+// ("12." for White, "12..." or "12…" for Black), letters or figurines (Nf3, ♘f3), x, X or : for captures, castling
+// with O or 0, long algebraic (Ng1-f3), check signs and annotation glyphs; older books' descriptive notation:
+// descriptive.js —, its sentences, and what the voice says for them.
 import { findDescriptive, findSpelled } from './descriptive.js';
 
 const FIGURINES = { '♔': 'K', '♚': 'K', '♕': 'Q', '♛': 'Q', '♖': 'R', '♜': 'R', '♗': 'B', '♝': 'B', '♘': 'N', '♞': 'N' };
 const PIECE = '[KQRBN♔♕♖♗♘♚♛♜♝♞]';
 const PROMO = '[QRBN♕♖♗♘♛♜♝♞]';
+// (a move starts outside a word, a number or another move — but a move number with its dots may follow a word or a full
+// stop right away, where the PDF's text lost a line break: "completely.1...h5", "was2...Ke7"; not a file's letter,
+// which makes a square: "Ra1...Kb2"; and a diagram's mark of the side to move: "B?8...h5?" starting a line)
+const OUTSIDE = '(?<![\\w♔-♟.\\-–])';
+const GLUED = '(?:(?<![\\d_♔-♟\\-–A-Za-h]|(?<!\\p{L})\\.)|(?<=(?:^|\\n)[WB]\\??))';
+// (a scan's text, read by the scanner's OCR, has move numbers cut in two — "1 4.Nxe4", "2 1 .Rxc6" —, an l or I for
+// a 1 — "l 7 .Re4", "l.c7" — and bullets for dots — "20 ••• Rc7": after a space, and with their dots, they are no
+// other words)
+const APART = '(?<=^|[\\s([,;:])';
+const DOTS = '\\s?(?<dots>(?:[.•]\\s?){1,4}(?:…\\s?)?|…\\s?)';
 const MOVE = new RegExp(
-  '(?<![\\w♔-♟.\\-–])' +
-    // a move number (with one dot for White, two or three — or "…" — for Black, none in "12 Nf3"), or Black's "...Nf6"
-    '(?:(?<num>\\d{1,3})(?:\\s?(?<dots>(?:\\.\\s?){1,4}(?:…\\s?)?|…\\s?)|\\s(?=[KQRBNa-hO0♔-♞]))|(?<bdots>\\.{2,3}|…)\\s?)?' +
-    '(?<san>[O0](?:-[O0]){1,2}' +
-    `|${PIECE}?[a-h][1-8][-–x:×][a-h][1-8](?:=?${PROMO})?` +
-    `|${PIECE}[a-h]?[1-8]?[x:×]?[a-h][1-8]` +
-    `|[a-h](?:[x:×][a-h][1-8]|[1-8])(?:=?${PROMO})?)` +
-    '(?<check>[+#†‡]{0,2})(?<nag>[!?]{1,2})?' +
+  // a move number (with one dot for White, two or three — or "…" — for Black, none in "12 Nf3"), or Black's "...Nf6"
+  `(?:(?:${GLUED}(?<num>\\d{1,3})|${APART}(?<cut>\\d ?\\d(?: ?\\d)?|[lI] ?\\d(?: ?\\d)?))${DOTS}|${APART}(?<lone>[lI])\\.(?=[KQRBNa-h])` +
+    `|${OUTSIDE}(?:(?<spaced>\\d{1,3})\\s(?=[KQRBNa-hO0♔-♞])|(?<bdots>\\.{2,3}|…)\\s?)?)` +
+    '(?<san>[O0](?: ?- ?[O0]){1,2}' +
+    `|${PIECE}?[a-h][1-8][-–x:×X][a-h][1-8](?:=?${PROMO})?` +
+    `|${PIECE}[a-h]?[1-8]?[x:×X]?[a-h][1-8]` +
+    `|[a-h](?:[x:×X][a-h][1-8]|[1-8])(?:=?${PROMO})?)` +
+    // (a mate: # — or m, a puzzle book's font's sign for it: "2.Ne7m")
+    '(?<check>[+#†‡]{0,2}|m)(?<nag>[!?]{1,2})?' +
     '(?![\\w♔-♟])',
   'gu',
 );
@@ -49,28 +60,34 @@ function strictMoves(text) {
   const out = [];
   for (const m of text.matchAll(MOVE)) {
     const g = m.groups;
-    const num = g.num ? Number(g.num) : null;
-    const dots = g.dots ? (g.dots.includes('…') ? 3 : g.dots.split('.').length - 1) : 0;
+    const written = g.num || g.cut || g.spaced || g.lone;
+    const num = written ? Number(written.replace(/[lI]/, '1').replace(/\s/g, '')) : null;
+    const dots = g.dots ? (g.dots.includes('…') ? 3 : g.dots.match(/[.•]/g).length) : g.lone ? 1 : 0;
     const side = num ? (dots >= 2 ? 'black' : 'white') : g.bdots ? 'black' : null;
     const san = g.san
       .replace(/[♔-♞]/g, c => FIGURINES[c] || '')
-      .replace(/[:×]/g, 'x')
+      .replace(/[:×X]/g, 'x')
       .replace(/–/g, '-')
+      .replace(/^[O0] ?- ?[O0]( ?- ?[O0])?$/, (c, long) => (long ? 'O-O-O' : 'O-O'))
       .replace(/^0/, 'O')
       .replace(/-0/g, '-O');
     const start = m.index;
     const end = start + m[0].length;
     const after = text.slice(end, end + 8);
+    // (two numbers with a space between them may also be a puzzle's number and its solution's first move number: "1
+    // 1.Qxg7#" — moves.js tells which from the moves before it)
+    const parts = g.cut && /^(\d+) (\d+)$/.exec(g.cut);
     out.push({
       start,
       end,
       num,
       side,
       san,
-      check: g.check || '',
+      check: g.check === 'm' ? '#' : g.check || '',
       pawn: /^[a-h]/.test(san) && !/-/.test(san),
       square: /^[a-h][1-8]$/.test(san) && /^(?:-|\s)square/i.test(after),
       words: '',
+      ...(parts && { cut: { whole: num, label: parts[1], num: Number(parts[2]) } }),
     });
     out.at(-1).words = spokenMove(out.at(-1));
   }
@@ -79,23 +96,23 @@ function strictMoves(text) {
 
 // A scanned page's moves: the OCR often reads a digit as a letter — 4 as a, d, g or q; 5 as s or b; 6 as é, b or G; 1
 // as l, i or I; 2 as z; 8 as B or & —, f as £ or {, c as ¢, a check as t, and castling with zeros. Such a word, where
-// it stands among moves (after a move number, or next to another move; a capture anywhere), is a move with the
-// readings it may have (sans): the board plays the first one that is legal (moves.js), the voice says that one — and
-// the word as it is written when none is.
+// it stands among moves (after a move number, or next to another move; a capture with a digit anywhere — "fixed" is a
+// word —; not a square of a piece's way, "Kc7-b7-a6"), is a move with the readings it may have (sans): the board plays
+// the first one that is legal (moves.js), the voice says that one — and the word as it is written when none is.
 const RANK_LIKE = { l: '1', i: '1', I: '1', '|': '1', z: '2', Z: '2', a: '4', d: '4', g: '4', q: '4', A: '4', s: '5', S: '5', b: '56', é: '6', G: '6', T: '7', B: '8', '&': '8' };
 const FILE_LIKE = { '£': 'f', '{': 'f', '¢': 'c' };
 const R = '[1-8lizZadgqAsSbéGTB&|]';
 const F = '[a-h£{¢]';
 const OCR_MOVE = new RegExp(
-  `(?<![\\p{L}\\p{N}.])(?:(?<num>\\d{1,3})(?<dots>\\s?(?:\\.\\s?){1,4}|\\s)|(?<bdots>\\.{2,3}|…)\\s?)?(?<tok>[KQRBN]?${F}?${R}?[x:×]?${F}${R}|[O0]-[O0](?:-[O0])?[O0]?)(?<chk>[+†‡#t]?)(?![\\p{L}\\p{N}])`,
+  `(?<![\\p{L}\\p{N}.\\-–])(?:(?<num>\\d{1,3})(?<dots>\\s?(?:\\.\\s?){1,4}|\\s)|(?<bdots>\\.{2,3}|…)\\s?)?(?<tok>[KQRBN]?${F}?${R}?[x:×X]?${F}${R}|[O0]-[O0](?:-[O0])?[O0]?)(?<chk>[+†‡#t]?)(?![\\p{L}\\p{N}])`,
   'gu',
 );
-const OCR_WORDS = new Set(['as', 'ad', 'ha', 'hi', 'Bag', 'Bad', 'Bed', 'Red', 'Rad']); // (said as words unless among moves)
+const OCR_WORDS = new Set(['as', 'ad', 'ha', 'hi', 'Bag', 'Bad', 'Bed', 'Red', 'Rad', 'fixed', 'fixes']); // (said as words unless among moves)
 
 /** The moves a word read by OCR may be (plain SAN), the reading as it is first. */
 function readings(tok) {
   if (/^[O0]-/.test(tok)) return /^[O0]-[O0]-[O0]/.test(tok) ? ['O-O-O', 'O-O'] : ['O-O', 'O-O-O'];
-  const m = new RegExp(`^([KQRBN]?)(${F}?)(${R}?)([x:×]?)(${F})(${R})$`, 'u').exec(tok);
+  const m = new RegExp(`^([KQRBN]?)(${F}?)(${R}?)([x:×X]?)(${F})(${R})$`, 'u').exec(tok);
   if (!m) return [];
   const [, piece, ff, fr, x, file, rank] = m;
   const files = c => (c ? [FILE_LIKE[c] || c] : ['']);
@@ -116,7 +133,7 @@ function ocrMoves(text, strict) {
     const num = g.num ? Number(g.num) : null;
     if (!sans.length || (!num && OCR_WORDS.has(g.tok))) continue;
     const side = num ? ((g.dots.match(/\./g) || []).length >= 2 ? 'black' : 'white') : g.bdots ? 'black' : null;
-    found.push({ start, end, num, side, san: sans[0], sans, check: /[+†t]/.test(g.chk) ? '+' : g.chk, pawn: !/^[KQRBNO]/.test(sans[0]), square: false, ocr: true, words: text.slice(start, end), sure: !!num || !!g.bdots || /x/.test(sans[0]) || /^O-O/.test(sans[0]) });
+    found.push({ start, end, num, side, san: sans[0], sans, check: /[+†t]/.test(g.chk) ? '+' : g.chk, pawn: !/^[KQRBNO]/.test(sans[0]), square: false, ocr: true, words: text.slice(start, end), sure: !!num || !!g.bdots || (/x/.test(sans[0]) && /\d/.test(g.tok)) || /^O-O/.test(sans[0]) });
   }
   // the others only next to a move (with no more than a space, a comma or a bracket between them)
   const all = [...strict, ...found].sort((a, b) => a.start - b.start);
@@ -139,7 +156,7 @@ function ocrMoves(text, strict) {
 // legal, and learns from the moves only one piece could make which piece the word is.
 const GLYPH_MOVE = new RegExp(
   '(?<![\\p{L}\\p{N}])(?:(?<num>\\d{1,3})(?<dots>\\s?(?:\\.\\s?){1,4}|\\s?…\\s?|\\s)|(?<bdots>\\.{2,3}|…)\\s?)?' +
-    '(?<glyph>[^\\s\\p{N}()[\\]{},;:]{1,3}?)(?<x>[x:×]?)(?<sq>[a-h][1-8])(?<chk>[+#†]{0,2})(?<nag>[!?]{1,2})?(?![\\p{L}\\p{N}])',
+    '(?<glyph>[^\\s\\p{N}()[\\]{},;:]{1,3}?)(?<x>[x:×X]?)(?<sq>[a-h][1-8])(?<chk>[+#†]{0,2})(?<nag>[!?]{1,2})?(?![\\p{L}\\p{N}])',
   'gu',
 );
 
@@ -148,8 +165,8 @@ function glyphMoves(text, strict) {
   for (const m of text.matchAll(GLYPH_MOVE)) {
     const g = m.groups;
     // (a piece's letter or figurine is no lost glyph: strictMoves reads it; nor a pawn's file before its capture —
-    // "exd5" —, nor a word's end, nor brackets or quotes)
-    if (/^[KQRBN♔-♞]$/.test(g.glyph) || /^[KQRBN][a-h1-8]$/.test(g.glyph) || /^[a-h]$/.test(g.glyph) || /^[.…]/.test(g.glyph) || /^[a-z]{3}$/.test(g.glyph) || /["“”‘’]/.test(g.glyph)) continue;
+    // "exd5" —, nor a word's end, nor brackets or quotes, nor a scan's "l." for "1.")
+    if (/^[KQRBN♔-♞]$/.test(g.glyph) || /^[KQRBN][a-h1-8]$/.test(g.glyph) || /^[a-h]$/.test(g.glyph) || /^[.…]/.test(g.glyph) || /^[lI]\.$/.test(g.glyph) || /^[a-z]{3}$/.test(g.glyph) || /["“”‘’]/.test(g.glyph)) continue;
     const start = m.index;
     const end = start + m[0].length;
     if (strict.some(t => t.start < end && t.end > start && !t.pawn)) continue;

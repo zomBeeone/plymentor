@@ -646,13 +646,21 @@ function glyphRuns(items) {
   return runs;
 }
 
-/** A row of a board in `font` within a run of glyphs (borders around it allowed): { offset } or null. */
+/**
+ * A row of a board in `font` within a run of glyphs (borders around it allowed): { offset, full (fewer than two empty
+ * squares: a row of pieces — "rmblkans" — that only a board's other rows show to be one) } or null.
+ */
 function rowIn(run, font) {
-  const fits = s => [...s].every(ch => font.empty.includes(ch) || Object.hasOwn(font.pieces, ch)) && [...s].filter(ch => font.empty.includes(ch)).length >= 2;
+  const glyphs = s => [...s].every(ch => font.empty.includes(ch) || Object.hasOwn(font.pieces, ch));
+  const empty = s => [...s].filter(ch => font.empty.includes(ch)).length;
   const n = [...run.str].length;
   if (n < 8 || n > 12) return null;
-  for (let offset = 0; offset + 8 <= n; offset++) if (fits([...run.str].slice(offset, offset + 8).join(''))) return { offset };
-  return null;
+  for (let offset = 0; offset + 8 <= n; offset++) {
+    const s = [...run.str].slice(offset, offset + 8).join('');
+    if (glyphs(s) && empty(s) >= 2) return { offset, full: false };
+  }
+  // (a row of pieces: the whole run, nothing around it)
+  return n === 8 && glyphs(run.str) ? { offset: 0, full: true } : null;
 }
 
 /**
@@ -669,7 +677,7 @@ export function fontBoards(items) {
       const r = rowIn(run, font);
       if (!r) continue;
       const each = run.w / [...run.str].length; // (one square's width)
-      rows.push({ i: run.ids[0], ids: run.ids, str: [...run.str].slice(r.offset, r.offset + 8).join(''), x: run.x + r.offset * each, y: run.y, h: run.h, w: each * 8, font });
+      rows.push({ i: run.ids[0], ids: run.ids, str: [...run.str].slice(r.offset, r.offset + 8).join(''), x: run.x + r.offset * each, y: run.y, h: run.h, w: each * 8, font, full: r.full });
     }
   const out = [];
   const used = new Set();
@@ -687,7 +695,8 @@ export function fontBoards(items) {
       if (board.length === 8 || (last && Math.abs(last.y - r.y - first.h) > first.h * 0.3)) break;
       board.push({ ...r, also: [] });
     }
-    if (board.length !== 8) continue;
+    // (rows of pieces only among rows that show the board: half of them at least)
+    if (board.length !== 8 || board.filter(r => r.full).length > 4) continue;
     // empty squares where the font has them: light and dark taking turns, a8 light; and its pieces on the squares the
     // font draws them on (a page that only looks like a board, or a board of another font, does not)
     const { font } = first;

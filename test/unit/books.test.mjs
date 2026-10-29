@@ -25,6 +25,22 @@ test('moves as books write them', () => {
   );
 });
 
+test('moves as some books and scans write them: X for a capture, castling with a space, m for mate, a number glued to the word before it, a scan’s cut numbers', () => {
+  assert.deepEqual(moves('16 f4 NXd3 17 QXd3 eXd5 8.Nf5 O- O 9.O - O-O'), ['16.f4', 'Nxd3', '17.Qxd3', 'exd5', '8.Nf5', 'O-O', '9.O-O-O']);
+  const [mate] = findMoves('2.Ne7m');
+  assert.deepEqual([label(mate), mate.check, mate.words], ['2.Ne7', '#', '2. knight to e7, checkmate']);
+  // (a PDF's text that lost a line break: the move number right after a word or a full stop — not after a square)
+  assert.deepEqual(moves('changes completely.1...h5! 2.Ka3 The right way was2...Ke7! but not 29.Ra1...Kb2'), ['1...h5', '2.Ka3', '2...Ke7', '29.Ra1']);
+  // a diagram's mark of the side to move before the first move
+  assert.deepEqual(moves('10-11\nB?23...Ke4 24.Nxf6+'), ['23...Ke4', '24.Nxf6']);
+  // a scanner's OCR: numbers cut in two, an l for 1, bullets for dots — and not a misread square's digit
+  assert.deepEqual(moves('13 ... Na5\n1 4.Nxe4 dxe4 1 5 . . . Bd5 1 6 .Nf5 l 7 .Re4 20 ••• Rc7 l.c7'), ['13...Na5', '14.Nxe4', 'dxe4', '15...Bd5', '16.Nf5', '17.Re4', '20...Rc7', '1.c7']);
+  assert.deepEqual(moves('4.Bxc6 dx¢6 5.d4'), ['4.Bxc6', '5.d4']);
+  // what a scan's moves may be read as (ocr): not a word ("fixed" is no f1xe4), nor a square of a piece's way
+  const ocr = text => findMoves(text, { ocr: true }).map(label);
+  assert.deepEqual(ocr('the pawns fixed on c5 18.Racl Kc7-b7-a6 19.Rfcl'), ['c5', '18.Rac1', 'Kc7-b7', '19.Rfc1']);
+});
+
 test('sentences: moves keep their dots, headings stand alone, long move lists are cut', () => {
   const text = 'Chapter 3\nThe Najdorf. After 1.e4 c5 2.Nf3 d6 3.d4 cxd4 Black plays 4...Nf6! Dr. Nunn wrote e.g. this. Is it good? Yes.';
   const ss = findSentences(text, findMoves(text)).map(s => text.slice(s.start, s.end).trim());
@@ -119,6 +135,33 @@ test('the board follows the book: a move number going back — to the game after
 test('the board follows the book: a position it cannot know, and a game from a diagram', () => {
   // a game in the middle (from a diagram the book shows): no position for its moves
   assert.deepEqual(track('21.Nf5 gxf5 22.Qg3+').list, ['-', '-', '-']);
+});
+
+test('the board follows the book: a first move named in a sentence starts no game; a book’s games are games of their own', () => {
+  // "1.d4" in a sentence, the game going on after it: no new game, and 5.O-O where the game is
+  let r = track('1.e4 e5 2.Nf3 Nc6 3.Bb5 a6 4.Ba4 Nf6. The analysis of 1.d4 is another story. 5.O-O Be7');
+  assert.deepEqual(r.list, ['e4@0', 'e5@1', 'Nf3@2', 'Nc6@3', 'Bb5@4', 'a6@5', 'Ba4@6', 'Nf6@7', '-', 'O-O@8', 'Be7@9']);
+  assert.equal(r.trees.length, 1);
+  // games one after the other, the same first moves: each a game of its own (the moves of one do not stray into
+  // another's)
+  r = track('4465 1 d4 Nf6 2 c4 e6 3 Nc3 Bb4 4 Qc2 O-O\n4466 1 d4 Nf6 2 c4 g6 3 Nc3 d5 4 cxd5 Nxd5 5 e4 Nxc3');
+  assert.equal(r.trees.length, 2);
+  assert.ok(r.moves.every(m => m.node));
+  assert.deepEqual(r.trees[1].mainline().map(n => n.san).slice(1), ['d4', 'Nf6', 'c4', 'g6', 'Nc3', 'd5', 'cxd5', 'Nxd5', 'e4', 'Nxc3']);
+  // a scan's move number cut in two, "1 0.Bc2": the game's 10th move (not a puzzle 1's 0th)
+  r = track('1.e4 e5 2.Nf3 Nc6 3.Bb5 a6 4.Ba4 Nf6 5.O-O Be7 6.Re1 b5 7.Bb3 d6 8.c3 O-O 9.h3 Na5 1 0.Bc2 c5 1 1.d4 Qc7');
+  assert.ok(r.moves.every(m => m.node));
+  assert.deepEqual(r.moves.slice(-4).map(label), ['10.Bc2', 'c5', '11.d4', 'Qc7']);
+});
+
+test('the board follows the book: back from notes to the line they left, where the reply right after the move can be played', () => {
+  // the first line read (2.Qh5) is not the main line; after the notes on 3...Nf6 and 3...f5, "4.c3 Bb6" goes on after
+  // 3...Bc5 — the one line where Black's bishop can go to b6
+  const r = track('1.e4 e5 2.Qh5 Nc6 3.Bc4 g6 is a mistake. Instead 2.Nf3 Nc6 3.Bc4 Bc5. If 3...Nf6 4.Ng5; and if 3...f5 4.d3. 4.c3 Bb6');
+  const c3 = r.moves.find(m => m.san === 'c3');
+  assert.deepEqual([c3.node.parent.san, r.moves.at(-1).node?.san], ['Bc5', 'Bb6']);
+  // the page's running head before its first move: that move is only shown, but the next one goes on after it
+  assert.deepEqual(track('1.e4 e5 2.Nf3 Nc6 3.Bb5', 'The Spanish Game\nNf6 4.O-O Be7').list, ['e4@0', 'e5@1', 'Nf3@2', 'Nc6@3', 'Bb5@4', 'Nf6?@5', 'O-O@6', 'Be7@7']);
 });
 
 test('the board follows the book: a move the text lost (misread by a scan) put back when only it lets the moves after it be played', () => {

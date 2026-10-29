@@ -13,18 +13,21 @@ import { Scanner } from './scan.js';
 import { bookFile, loadCache, saveCache } from './library.js';
 import { startReading, prepareReading, cancelReading, readAloud, stopSpeaking } from '../voice.js';
 
-const TEXT_CACHE = 3; // the version of what is kept of a PDF's pages (pdf.js's version goes with it)
+const TEXT_CACHE = 4; // the version of what is kept of a PDF's pages (pdf.js's version goes with it)
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 
-function makeUnit(index, title, text, more) {
-  const moves = findMoves(text, { ocr: !!more?.ocr });
+function makeUnit(index, title, text, more, { readings = !!more?.ocr } = {}) {
+  const moves = findMoves(text, { ocr: readings });
   return { index, title, text, moves, sentences: findSentences(text, moves), diagrams: [], ...more };
 }
 
-/** A PDF page (as kept: its text, items and diagrams) as a unit; its diagrams are copies: the reading follows them. */
+/**
+ * A PDF page (as kept: its text, items and diagrams) as a unit; its diagrams are copies: the reading follows them. Its
+ * moves are read as a scan's may be written (text.js: ocrMoves) — the text of many PDFs is a scanner's OCR.
+ */
 function pageUnit(u, page) {
   const diagrams = (page.diagrams || []).map((d, k) => ({ at: d.at, placement: d.placement || null, side: d.side || null, font: !!d.font, sure: d.sure, alts: d.alts, box: d.box, kind: 'diagram', unit: u, index: k }));
-  return makeUnit(u, `Page ${u + 1}`, page.text, { items: page.items, diagrams, ocr: !!(page.scan && page.scanned) });
+  return makeUnit(u, `Page ${u + 1}`, page.text, { items: page.items, diagrams, ocr: !!(page.scan && page.scanned) }, { readings: true });
 }
 
 class Book {
