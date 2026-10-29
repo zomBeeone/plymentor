@@ -829,10 +829,11 @@ export function readBoards(boards, { examples = [] } = {}) {
   for (const list of kept.values()) known.push(...list);
   // the fill between white and black, per piece, where the examples have both colours
   const fills = Object.fromEntries(TYPES.map(t => [t, whiteFill]));
+  const both = new Set();
   for (const t of TYPES) {
     const w = known.filter(e => e.type === t && e.white === true).map(e => e.fill);
     const b = known.filter(e => e.type === t && e.white === false).map(e => e.fill);
-    if (w.length && b.length && Math.max(...w) < Math.min(...b)) fills[t] = (Math.max(...w) + Math.min(...b)) / 2;
+    if (w.length && b.length && Math.max(...w) < Math.min(...b)) (fills[t] = (Math.max(...w) + Math.min(...b)) / 2), both.add(t);
   }
   // read every piece by its likeness to the examples: the best of each type — first as they are (fast), then the
   // best two of each type allowing a pixel's shift
@@ -866,20 +867,23 @@ export function readBoards(boards, { examples = [] } = {}) {
           .slice(0, 12)
           .forEach(s => known.push({ type: t, silhouette: s.silhouette }));
   }
-  // (a font's pawn and bishop may look alike, where the book's do not: the book's pawns are its smallest pieces — the
-  // pieces read as one or the other fall in two groups by their area, when there are both)
+  // (a font's pawn and bishop may look alike, where the book's do not: the pieces read as one or the other fall in two
+  // groups by their silhouettes, when the two are different enough — the pawns the larger, a book's commonest piece;
+  // a piece whose two scores were close goes by its group)
+  const top = c => TYPES.reduce((a, t) => (c.scores[t] > c.scores[a] ? t : a), 'p');
   if (!seeded) {
-    const top = c => TYPES.reduce((a, t) => (c.scores[t] > c.scores[a] ? t : a), 'p');
     const pb = all.filter(c => ['p', 'b'].includes(top(c)));
-    const cut = split(pb.map(c => c.shape.area));
-    const small = pb.filter(c => c.shape.area < cut);
-    const big = pb.filter(c => c.shape.area >= cut);
-    const mean = list => list.reduce((s, c) => s + c.shape.area, 0) / list.length;
-    if (cut !== null && small.length && big.length && mean(big) > mean(small) * 1.25)
-      for (const c of pb) {
+    const g = twoGroups(pb);
+    const size = [0, 1].map(k => (g ? g.group.filter(x => x === k).length : 0));
+    if (g && g.alike < 0.95 && Math.min(...size) >= Math.max(4, pb.length * 0.05)) {
+      const pawn = size[0] >= size[1] ? 0 : 1;
+      pb.forEach((c, i) => {
+        if (Math.abs(c.scores.p - c.scores.b) >= 0.1) return;
         const best = Math.max(c.scores.p, c.scores.b);
-        c.scores = { ...c.scores, p: c.shape.area < cut ? best : Math.min(c.scores.p, best - 0.01), b: c.shape.area < cut ? Math.min(c.scores.b, best - 0.01) : best };
-      }
+        const p = g.group[i] === pawn;
+        c.scores = { ...c.scores, p: p ? best : Math.min(c.scores.p, best - 0.01), b: p ? Math.min(c.scores.b, best - 0.01) : best };
+      });
+    }
   }
   // the smallest piece is a pawn: a mark on a square (a dot, an asterisk) is much smaller and lower than the book's pawns
   const pawns = known.filter(e => e.type === 'p' && e.area);
@@ -887,8 +891,66 @@ export function readBoards(boards, { examples = [] } = {}) {
   const smallest = pawns.length ? median(pawns.map(e => e.area)) * 0.55 : PIECE_MIN;
   const lowest = pawns.length ? median(pawns.map(e => e.height)) * 0.75 : 0;
   for (const cell of all) if (cell.shape.area < smallest || cell.shape.height < lowest) cell.scores = null;
+  // the fill between white and black of each piece the examples do not have in both colours, from the book's squares
+  // read as it (a book's white rook or queen may have much more ink inside than its pawn: Kotov's are black with a
+  // window): of the cuts, the one that leaves the fewest boards with more of the piece on a side than a game has — two
+  // black queens, three white bishops —, of those the nearest to the cut between its two groups of fills (or the book's)
+  for (const t of TYPES) {
+    if (both.has(t)) continue;
+    const per = boards.map(b => b.cells.flat().filter(c => c.shape.area >= PIECE_MIN && c.scores && top(c) === t).map(c => c.shape.fill)).filter(f => f.length);
+    const values = per.flat();
+    if (values.length < 6) continue;
+    const near = twoFills(values) ?? fills[t];
+    let best = { cut: near, over: Infinity };
+    for (let cut = 0.2; cut <= 0.96; cut += 0.02) {
+      let over = 0;
+      for (const f of per) {
+        const white = f.filter(v => v < cut).length;
+        over += (white > MOST[t]) + (f.length - white > MOST[t]);
+      }
+      if (over < best.over || (over === best.over && Math.abs(cut - near) < Math.abs(best.cut - near))) best = { cut, over };
+    }
+    fills[t] = best.cut;
+  }
   for (const b of boards) placePieces(b, fills);
   return { examples: known, whiteFill, fills };
+}
+
+// How many of each piece a side has at most in a game (no promotions).
+const MOST = { p: 8, n: 2, b: 2, r: 2, q: 1, k: 1 };
+
+/**
+ * Two groups of a book's squares by their silhouettes (2-means, from a small piece's and a large one's): each square's
+ * group (0 or 1) and how alike the groups' middles are (a correlation: -1 … 1); null for fewer than 8.
+ */
+function twoGroups(cells) {
+  if (cells.length < 8) return null;
+  const byArea = [...cells].sort((a, b) => a.shape.area - b.shape.area);
+  let middles = [byArea[Math.floor(cells.length * 0.1)], byArea[Math.floor(cells.length * 0.9)]].map(c => Float32Array.from(c.shape.silhouette));
+  const units = cells.map(c => unit(c.shape.silhouette));
+  let group = [];
+  for (let round = 0; round < 12; round++) {
+    const u = middles.map(unit);
+    group = units.map(v => (dot(v, u[0]) >= dot(v, u[1]) ? 0 : 1));
+    middles = middles.map((old, k) => {
+      const members = cells.filter((c, i) => group[i] === k);
+      if (!members.length) return old;
+      const m = new Float32Array(old.length);
+      for (const c of members) for (let i = 0; i < m.length; i++) m[i] += c.shape.silhouette[i] / members.length;
+      return m;
+    });
+  }
+  return { group, alike: dot(unit(middles[0]), unit(middles[1])) };
+}
+
+/** Two groups of fills (each a tenth of them at least, their means 0.15 apart): the value between them, else null. */
+function twoFills(values) {
+  const cut = split(values);
+  if (cut === null) return null;
+  const lo = values.filter(v => v < cut);
+  const hi = values.filter(v => v >= cut);
+  const mean = list => list.reduce((s, v) => s + v, 0) / list.length;
+  return Math.min(lo.length, hi.length) >= Math.max(3, values.length * 0.1) && mean(hi) - mean(lo) >= 0.15 ? cut : null;
 }
 
 const LIKE_MIN = 0.55; // less like any piece than this: a mark on the square (a dot, an asterisk), not a piece
@@ -938,6 +1000,17 @@ function placePieces(b, fills) {
       king.ranked = ['k'];
       king.white = white;
     }
+  // at most as many of a piece on a side as a game has (no promotions): the ones least sure of it are the piece they
+  // are next most like (a white pawn on a hatched square, its outline grown by the hatching, read as a bishop)
+  const margin = x => x.cell.scores[x.ranked[0]] - (x.ranked[1] ? x.cell.scores[x.ranked[1]] : -1);
+  for (const t of ['q', 'r', 'b', 'n', 'p'])
+    for (const white of [true, false])
+      for (let mine = choice.filter(x => x.white === white && x.ranked[0] === t); mine.length > MOST[t]; mine = choice.filter(x => x.white === white && x.ranked[0] === t)) {
+        const least = mine.reduce((a, x) => (margin(x) < margin(a) ? x : a));
+        least.ranked = least.ranked.slice(1).filter(u => u !== 'k');
+        if (!least.ranked.length) choice.splice(choice.indexOf(least), 1);
+        else least.white = colour(least);
+      }
   let sure = 1;
   const alts = [];
   const letter = (t, white) => (white ? t.toUpperCase() : t);

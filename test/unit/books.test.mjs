@@ -36,9 +36,12 @@ test('moves as some books and scans write them: X for a capture, castling with a
   // a scanner's OCR: numbers cut in two, an l for 1, bullets for dots — and not a misread square's digit
   assert.deepEqual(moves('13 ... Na5\n1 4.Nxe4 dxe4 1 5 . . . Bd5 1 6 .Nf5 l 7 .Re4 20 ••• Rc7 l.c7'), ['13...Na5', '14.Nxe4', 'dxe4', '15...Bd5', '16.Nf5', '17.Re4', '20...Rc7', '1.c7']);
   assert.deepEqual(moves('4.Bxc6 dx¢6 5.d4'), ['4.Bxc6', '5.d4']);
-  // what a scan's moves may be read as (ocr): not a word ("fixed" is no f1xe4), nor a square of a piece's way
+  // what a scan's moves may be read as (ocr): not a word ("fixed" is no f1xe4), nor a piece's way ("Kc7-b7-a6"); long
+  // algebraic with a letter for a digit, a pawn's capture by its files ("10 e5 de": d takes on e)
   const ocr = text => findMoves(text, { ocr: true }).map(label);
-  assert.deepEqual(ocr('the pawns fixed on c5 18.Racl Kc7-b7-a6 19.Rfcl'), ['c5', '18.Rac1', 'Kc7-b7', '19.Rfc1']);
+  assert.deepEqual(ocr('the pawns fixed on c5 18.Racl Kc7-b7-a6 19.Rfcl'), ['c5', '18.Rac1', '19.Rfc1']);
+  assert.deepEqual(ocr('3. Bfl-g2 d7-d5 5. Qdl-a4+ RaS-bS. If 10 e5 de, then'), ['3.Bf1g2', 'd7-d5', '5.Qd1a4', 'Ra5b5', '10.e5', 'dxe2']);
+  assert.deepEqual(findMoves('24. RaS-bS', { ocr: true })[0].sans, ['Ra5b5', 'Ra5b8', 'Ra8b5', 'Ra8b8']);
 });
 
 test('sentences: moves keep their dots, headings stand alone, long move lists are cut', () => {
@@ -192,6 +195,34 @@ test('moves whose figurine the PDF lost: played as the one piece that can make t
   // what is no lost figurine: a pawn's capture, Black's dots, a word, a piece's letter
   assert.deepEqual(moves('1.d4 d5 2.c4 dxc4 3.e3 b5 ...e6 4.a4 Nc6'), ['1.d4', 'd5', '2.c4', 'dxc4', '3.e3', 'b5', '...e6', '4.a4', 'Nc6']);
   assert.ok(findMoves('He went to e4 and Nf3 then.').every(m => !m.glyph));
+});
+
+test('lost figurines as a scanner’s OCR writes them: junk of up to four characters, its numbers and checks; the moves after one tell its piece; “�” is never learnt', () => {
+  // (Pump Up's knight "lLl", bishop ".t", queen "'1W", rook "g"; check as t; a number cut in two; a square with an l)
+  const read = findMoves("1 5 .lLld6t .txd6 16.exd6 '1Wb6 17.gc1 �fl", { ocr: true });
+  assert.deepEqual(
+    read.map(m => [label(m), m.glyph || null, m.check]),
+    [
+      ['15.Nd6', 'lLl', '+'],
+      ['Nxd6', '.t', ''],
+      ['16.exd6', null, ''],
+      ['Nb6', "'1W", ''],
+      ['17.Nc1', 'g', ''],
+      ['Nf1', '�', ''],
+    ],
+  );
+  // not lost figurines: squares' pairs, names, a move number glued to an evaluation, a promotion glued to a move
+  assert.ok(findMoves('the squares g5/e4 and d6/d8; Tal and Marcel; 8.Bb2+–6.Bf2 Be7, 5.f8=QRa1+ Kg7', { ocr: true }).every(m => !m.glyph));
+  // "�" — any piece the OCR could not tell —: the moves after it tell which (2.Nf3: only a knight's 3.g5 can follow)
+  const G = '�';
+  assert.deepEqual(track(`1.e4 e5 2.${G}f3 d6 3.${G}g5`).list, ['e4@0', 'e5@1', 'Nf3@2', 'd6@3', 'Ng5@4']);
+  // and never learnt from the moves only a knight could make: 5.?e2 may be the queen's, the bishop's, the king's
+  const knights = `1.${G}f3 ${G}f6 2.${G}c3 ${G}c6 3.e4 e5 4.d3 d6 5.${G}e2`;
+  assert.equal(track(knights).list.at(-1), '-');
+  assert.equal(track(knights.replaceAll(G, '')).list.at(-1), 'Ne2@8');
+  // a number cut in two goes on from the numbers written before it, when the line itself is lost ("13.??": not a move)
+  const lost = track('1.e4 e5 2.Nf3 Nc6 3.Bb5 a6 4.Ba4 Nf6 5.O-O Be7 6.Re1 b5 7.Bb3 d6 8.c3 O-O 9.h3 Na5 10.Bc2 c5 11.d4 Qc7 12.Nbd2 cxd4 13.?? 14.Nf1 Bd7 1 5.Ne3');
+  assert.equal(lost.moves.at(-1).num, 15);
 });
 
 test('descriptive notation: compact, spaced and old-style moves, castling, checks, captures named by what they take', () => {

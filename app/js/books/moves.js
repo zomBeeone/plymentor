@@ -190,6 +190,21 @@ function playableIn(pos, t) {
 /** The move of the text `t` at `node` (see playableIn), or null. */
 const playable = (node, t) => (t.desc ? descriptiveMoves(node.fen, t.desc)[0] || null : playableIn(positionOf(node.fen), t));
 
+/**
+ * The moves the text's move `t` may be at `node` (UCI): the one playable gives — or, for a lost figurine more than one
+ * piece can be (and not the one learnt for it), each of theirs: the moves written after it tell which (see pick).
+ */
+function readings(node, t) {
+  const pos = !t.desc && t.glyph && positionOf(node.fen);
+  if (!pos) {
+    const uci = playable(node, t);
+    return uci ? [uci] : [];
+  }
+  const legal = t.sans.map(san => [san, moveIn(pos, san)]).filter(([, uci]) => uci);
+  const learnt = legal.find(([san]) => san[0] === t.piece);
+  return learnt ? [learnt[1]] : [...new Set(legal.map(([, uci]) => uci))];
+}
+
 /** The legal moves of a position as UCI (a pawn reaching the last rank: a queen). */
 function legalMoves(pos) {
   const out = [];
@@ -423,21 +438,32 @@ export class MoveTracker {
   /**
    * The first numbered move after a diagram whose move number or side to move was a guess: the diagram takes them from
    * it — not from White's "1." (a game's start, most often), unless it is the diagram's own solution (`solution`).
+   * When it is the move that led to the diagram (its piece where it went, the move after it played from the diagram
+   * with the other side to move: "My last move was 1...Qc7. After 2.g3 …", the diagram at the end of the page before),
+   * the diagram is the position after it: returns 'caption' (see diagram).
    */
-  settle(t, solution = false) {
+  settle(t, solution = false, ahead = []) {
     const { root, guess } = this.tree;
     this.tree.guess = null;
-    if (this.cur !== root || root.children.length || (!solution && t.num === 1 && t.side === 'white')) return;
+    if (this.cur !== root || root.children.length || (!solution && t.num === 1 && t.side === 'white')) return null;
     const f = root.fen.split(' ');
     if (guess.side) f[1] = t.side === 'black' ? 'b' : 'w';
     if (guess.number) f[5] = String(t.num);
     const fen = f.join(' ');
-    try {
-      posFromFen(fen);
-    } catch {
-      return;
+    if (positionOf(fen) && playable({ fen }, t)) {
+      root.fen = fen;
+      return null;
     }
-    if (playable({ fen }, t)) root.fen = fen;
+    const s = t.side === 'white' ? 'b' : 'w';
+    if (!t.side || (!guess.side && root.fen.split(' ')[1] !== s) || !ledTo(f[0], t)) return null;
+    f[1] = s;
+    if (guess.number) f[5] = String(t.num + (s === 'w' ? 1 : 0));
+    const after = f.join(' ');
+    const pos = positionOf(after);
+    if (!pos || (ahead.length && !runFrom(pos, [ahead[0].t]))) return null;
+    root.fen = after;
+    this.caption = { moves: [t], node: root };
+    return 'caption';
   }
 
   /**
@@ -462,17 +488,21 @@ export class MoveTracker {
     const alone = !t.num && !sequence && !variation;
     if (alone && t.pawn && !t.side) return null; // a square, most often
     if (alone && !this.tree) return t.pawn ? null : this.startGame(t);
-    if (t.num && this.tree?.guess) this.settle(t);
+    if (t.num && this.tree?.guess && this.settle(t, false, ahead) === 'caption') return { tree: this.tree, node: this.cur, shown: false, restated: true };
     const legal = [];
     for (const node of this.candidates(t, { variation, sequence })) {
-      const uci = playable(node, t);
-      if (uci) legal.push({ node, uci });
+      for (const uci of readings(node, t)) legal.push({ node, uci });
       if (legal.length && !t.num) break;
     }
-    const chosen = t.num && ahead.length ? this.pick(t, legal, ahead, para) : legal[0];
+    let chosen = (t.num || legal.length > 1) && ahead.length ? this.pick(t, legal, ahead, para) : legal[0];
+    // (a lost figurine more than one piece can be, the moves after it no help to tell which: none)
+    if (t.glyph && (chosen?.tied || legal.length) > 1) chosen = null;
     // ("1." of White's first move where the moves after it cannot be played — the first position of a diagram's game,
-    // with the number and side a guess —, but from the initial position: a game of its own)
-    if (chosen && !chosen.score && t.num === 1 && t.side === 'white' && ahead.length) {
+    // with the number and side a guess —, or fewer of them than from the initial position — as many, in a game the
+    // reading has left —: a game of its own from the initial position — "After 1.c4 c5 2.b3 …")
+    const left = chosen?.tree && chosen.tree !== this.tree;
+    const here = chosen && t.num === 1 && t.side === 'white' && ahead.length ? followOn(chosen.node, chosen.uci, ahead) : -1;
+    if (here >= 0 && (!here || this.fromStart(t, ahead) > here - (left ? 1 : 0))) {
       const started = this.startGame(t, ahead, true);
       if (started) return started;
     }
@@ -605,7 +635,8 @@ export class MoveTracker {
    * note going back to a line that is neither the one being read nor the main line (two of them at least, or one when
    * the move fits nowhere else), or the text going back to a game it left (two at least: "Let's try 1.Na3" after a
    * position the book showed on its own); never the start of a game from the initial position ("1." there begins a
-   * game of its own).
+   * game of its own). Returns { node, uci, tree (another game's), score, tied (how many different moves — pieces —
+   * the moves after it fit as well) } or undefined.
    */
   pick(t, legal, ahead, para) {
     const scores = legal.length > 1 ? legal.map(c => followOn(c.node, c.uci, ahead)) : legal.map(c => followOn(c.node, c.uci, ahead, 1));
@@ -615,7 +646,8 @@ export class MoveTracker {
       const end = mainLine(this.tree).at(-1);
       chosen = legal.find((c, i) => c.node === end && scores[i] === best) || chosen;
     }
-    if (best > 0 || !this.tree) return chosen && { ...chosen, score: best };
+    const tied = new Set(legal.filter((c, i) => scores[i] === best).map(c => c.uci.slice(0, 2))).size;
+    if (best > 0 || !this.tree) return chosen && { ...chosen, score: best, tied };
     const known = new Set(legal.map(c => c.node));
     // (one of the game being read where the reply right after it can be played: when it can be played after none of
     // the places it may be — "6.Kf4 Kh6", back to the main line from a note)
@@ -626,7 +658,14 @@ export class MoveTracker {
       const score = uci ? followOn(node, uci, ahead) : -1;
       if (score >= need(tree) && score > best) (best = score), (chosen = { node, uci, tree });
     }
-    return chosen && { ...chosen, score: best };
+    return chosen && { ...chosen, score: best, tied: chosen.tree ? 1 : tied };
+  }
+
+  /** How many of the moves written after `t` (White's "1.") can be played after it from the initial position (-1: not it). */
+  fromStart(t, ahead) {
+    const root = { fen: INITIAL_FEN };
+    const uci = playable(root, t);
+    return uci ? followOn(root, uci, ahead) : -1;
   }
 
   /**
@@ -694,12 +733,17 @@ export class BookMoves {
     this.prev = null; // the last move followed
     this.glyphs = new Map(); // a lost figurine's glyph → { piece letter: moves where only that piece could go }
     this.labels = new Map(); // a diagram's number (see labelsOf) → the diagram (null: more than one has it)
+    this.lastNum = null; // the number of the last numbered move of the text
   }
 
-  /** The piece a lost figurine's glyph is, once the book's moves have shown it clearly (twice, and twice as often). */
+  /**
+   * The piece a lost figurine's glyph is, once the book's moves have shown it clearly (twice, and twice as often as
+   * any other, and seven times in ten) — never "�", the character for any glyph a font or an OCR could not tell.
+   */
   pieceOf(glyph) {
     const seen = [...(this.glyphs.get(glyph) || new Map())].sort((a, b) => b[1] - a[1]);
-    return seen[0] && seen[0][1] >= 2 && seen[0][1] >= 2 * (seen[1]?.[1] || 0) ? seen[0][0] : null;
+    const all = seen.reduce((n, [, k]) => n + k, 0);
+    return glyph !== '\uFFFD' && seen[0] && seen[0][1] >= 2 && seen[0][1] >= 2 * (seen[1]?.[1] || 0) && seen[0][1] >= all * 0.7 ? seen[0][0] : null;
   }
 
   /** A lost figurine's move was played where only one piece could make it: that piece is what the glyph stands for. */
@@ -748,11 +792,12 @@ export class BookMoves {
       // (a paragraph begins: after a sentence's end and a line break, or a blank line)
       const para = /(?:[.!?…]["'”’)\]]*[ \t]*\n|\n[ \t]*\n)\s*$/.test(between);
       for (const a of [t, ...ahead.map(x => x.t)]) if (a.glyph) a.piece = this.pieceOf(a.glyph);
-      // (a move number cut in two by a scan's OCR — "1 4.Nxe4" — is the one the line being read goes on with; else the
-      // first part is a puzzle's number and the second the move's: "1 1.Qxg7#")
+      // (a move number cut in two by a scan's OCR — "1 4.Nxe4" — is the one the line being read, or the moves written
+      // before it, go on with; else the first part is a puzzle's number and the second the move's: "1 1.Qxg7#")
       if (t.cut) {
         const at = this.tracker.cur;
-        t.num = at && Math.abs(fullmove(at) - t.cut.whole) <= 1 ? t.cut.whole : t.cut.num;
+        const near = n => !!n && Math.abs(n - t.cut.whole) <= 1;
+        t.num = near(at && fullmove(at)) || near(this.lastNum) ? t.cut.whole : t.cut.num;
         t.words = spokenMove(t);
       }
       // (a puzzle's solution, after the number of its diagram: from that diagram's position)
@@ -775,6 +820,7 @@ export class BookMoves {
       } else if (t.desc && !t.spelled) t.words = spokenDescriptive(t);
       this.gap = '';
       this.prev = t;
+      if (t.num) this.lastNum = t.num;
       prevEnd = t.end;
     }
     while (d < diagrams.length) diagram(diagrams[d++]);

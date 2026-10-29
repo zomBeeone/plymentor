@@ -120,6 +120,9 @@ class Book {
 }
 
 const PICTURES = 1; // the version of what is kept of an EPUB's pictures
+// The version of how a book's boards are read (diagrams.js readBoards): when it changes, the boards kept from before —
+// a scanned PDF's, an EPUB's pictures' — are read again (not looked for again).
+const READING = 2;
 
 /** A FEN in a picture's description (its alt text): { placement, side ('w', 'b' or null) } or null. */
 function fenIn(alt) {
@@ -150,13 +153,13 @@ class EpubDiagrams {
     const cache = await loadCache(this.book.meta.id).catch(() => null);
     if (cache?.version !== `epub/${PICTURES}`) return;
     this.kept = cache.pictures || {};
-    this.readings = cache.readings || {};
+    if (cache.reading === READING) this.readings = cache.readings || {};
   }
 
   save() {
     if (!this.dirty) return;
     this.dirty = false;
-    return saveCache(this.book.meta.id, { version: `epub/${PICTURES}`, pictures: this.kept, readings: this.readings }).catch(() => {});
+    return saveCache(this.book.meta.id, { version: `epub/${PICTURES}`, reading: READING, pictures: this.kept, readings: this.readings }).catch(() => {});
   }
 
   /** The diagrams of chapter `u` among its blocks (a picture that is one gets .diagram: the diagram's index). */
@@ -278,17 +281,36 @@ export async function openBook(meta) {
   (async () => {
     const version = `${TEXT_CACHE}/${pdfVersion()}`;
     const cache = await loadCache(meta.id);
-    const pages = cache?.version === version && cache.pages?.length === doc.numPages ? cache.pages : new Array(doc.numPages).fill(null);
+    const kept = cache?.version === version && cache.pages?.length === doc.numPages;
+    const pages = kept ? cache.pages : new Array(doc.numPages).fill(null);
     // what is read of the pages is kept as it comes (a scanned book takes long), and when the book is closed
     let dirty = false;
     let savedAt = Date.now();
+    // how the kept boards were read (when it is not today's way, they are read again — and again the next time the
+    // book is opened, if that fails)
+    let reading = kept ? cache.reading : READING;
     const save = (now = false) => {
       dirty = true;
       if (!now && Date.now() - savedAt < 20000) return;
       dirty = false;
       savedAt = Date.now();
-      return saveCache(meta.id, { version, pages }).catch(() => {});
+      return saveCache(meta.id, { version, reading, pages }).catch(() => {});
     };
+    // (the boards kept from before, read as boards were read then: read again, all together)
+    if (reading !== READING) {
+      const boards = [];
+      pages.forEach(p => p?.diagrams?.forEach(d => d.board && boards.push(d)));
+      const scanner = boards.length ? new Scanner(doc) : null;
+      try {
+        if (scanner) (await scanner.read(boards.map(d => d.board))).forEach((r, i) => Object.assign(boards[i], r));
+        reading = READING;
+        dirty = true;
+      } catch (e) {
+        console.warn("the book's boards could not be read again:", e);
+      } finally {
+        scanner?.close();
+      }
+    }
     book.flush = () => dirty && save(true);
     const scans = [];
     for (let n = 1; n <= doc.numPages && !book.closed; n++) {

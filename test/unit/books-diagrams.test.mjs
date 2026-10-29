@@ -2,7 +2,7 @@
 // read by the book's own pieces, a scanned page's text from its OCR, and the board following the diagrams.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fontBoards, findBoards, findPictureBoard, findFigureBoards, grayFrom, packBoard, unpackBoard, readBoards, placement, pieceExample } from '../../app/js/books/diagrams.js';
+import { fontBoards, findBoards, findPictureBoard, findFigureBoards, grayFrom, packBoard, unpackBoard, readBoards, placement, pieceExample, CELL } from '../../app/js/books/diagrams.js';
 import { pageText, pictureBoxes, diagramShaped } from '../../app/js/books/pdf.js';
 import { ocrText } from '../../app/js/books/ocr.js';
 import { findMoves, findSentences, spokenParts } from '../../app/js/books/text.js';
@@ -215,6 +215,25 @@ test('the board follows the diagrams: the side the book marks, a caption, the po
   assert.ok(u.moves.every(m => posFromFen(m.node.fen).isCheckmate()));
 });
 
+test('the board follows the diagrams: a caption on the next page; a game from the start after a diagram that looked like one', () => {
+  // a diagram at the end of a page, "My last move was 1...Qc7" on the next: the move that led to it — the game goes on
+  // from the diagram with White to move
+  let book = new BookMoves();
+  const end = follow(book, 'Test 1.\n', [{ at: 8, placement: '6k1/2q5/8/8/8/8/5PPP/6K1', font: true }]);
+  let u = follow(book, 'My last move was 1...Qc7, attacking the pawn. After 2.g3 Qc6 3.h4 the game is level.');
+  assert.equal(end.diagrams[0].node.fen, '6k1/2q5/8/8/8/8/5PPP/6K1 w - - 0 2');
+  assert.deepEqual([u.moves[0].restated, u.moves[0].node], [true, end.diagrams[0].node]);
+  assert.ok(u.moves.slice(1).every(m => m.node && m.tree === end.diagrams[0].tree));
+  // an opening's diagram with nothing after it (its side and number a guess), another game (one the diagram has no
+  // h-pawns for), then "After 1.c4 c5 …": a game from the initial position — not the diagram's, where its moves can be
+  // played too
+  book = new BookMoves();
+  follow(book, 'The structure:\n', [{ at: 15, placement: 'rnbqkbnr/ppppppp1/8/8/8/8/PPPPPPP1/RNBQKBNR', font: true }]);
+  follow(book, '1.h4 h5 2.d4 d5');
+  u = follow(book, 'After 1.c4 c5 2.b3 Nf6 3.Bb2 g6 the game is a different one.');
+  assert.ok(u.moves.every(m => m.node && m.tree.isStandardStart));
+});
+
 test('a scanned page: its words from the OCR, in lines and paragraphs, without the running head, the folio and the labels of a diagram', () => {
   const W = 1000;
   const H = 1500;
@@ -328,6 +347,50 @@ test('a side without its king gets the piece most like one (its colour misread o
   const b = unpackBoard(JSON.parse(JSON.stringify(packBoard(findPictureBoard(img)))));
   readBoards([b], { examples: pieceSquares(64).map(p => pieceExample(p.type, p.img)) });
   assert.equal(placement(b), '4k3/8/8/8/8/8/8/R3K3');
+});
+
+// A book's squares as cellShape makes them, without a picture: each piece's silhouette (the test pieces' shapes), its
+// area and height, its colour's fill (white: `white`, black: 0.95), on its square's colour.
+const PIECES = Object.fromEntries(pieceSquares(64).map(p => [p.type, pieceExample(p.type, p.img).silhouette]));
+function squaresOf(fen, { white = {}, shapes = {} } = {}) {
+  const rows = fen.split('/').map(r => r.replace(/\d/g, d => '.'.repeat(Number(d))));
+  const cells = rows.map((row, r) =>
+    [...row].map((ch, c) => {
+      const darkSquare = (r + c) % 2 === 1;
+      if (ch === '.') return { darkSquare, shape: { silhouette: new Float32Array(CELL * CELL), area: 0, height: 0, fill: 0, ink: 0 } };
+      const s = shapes[`${'abcdefgh'[c]}${8 - r}`] || PIECES[ch.toLowerCase()];
+      const area = s.reduce((n, v) => n + v, 0) / s.length;
+      const rowsInked = [...Array(CELL).keys()].filter(y => s.slice(y * CELL, y * CELL + CELL).some(v => v > 0.5));
+      const isWhite = ch !== ch.toLowerCase();
+      return { darkSquare, shape: { silhouette: s, area, height: (rowsInked.at(-1) - rowsInked[0] + 1) / CELL, fill: isWhite ? (white[ch.toLowerCase()] ?? 0.3) : 0.95, ink: area } };
+    }),
+  );
+  return { cells, rows: 8, cols: 8 };
+}
+
+test('a book’s own pieces: pawns told from bishops by their shapes, each piece’s colours by its own ink, at most a game’s pieces a side', () => {
+  // a font whose pawn and bishop look alike (the same example for both); the book's white bishops much inked (a
+  // window in them, as in Kotov's): its pawns and bishops fall in two groups by their shapes, its white bishops are
+  // white by the bishops' own ink (two black bishops a side at most)
+  const blob = PIECES.p.map((v, i) => (v + PIECES.b[i]) / 2);
+  const examples = [...['p', 'b'].map(type => ({ type, silhouette: blob })), ...['n', 'r', 'q', 'k'].map(type => ({ type, silhouette: PIECES[type] }))];
+  const fens = [
+    'r1b1k3/pp3ppp/2n5/8/8/2N5/PP3PPP/R1B1K3',
+    '2b1kb2/p4ppp/1p6/8/8/1P6/P4PPP/2B1KB2',
+    '4kb2/pp3pp1/7p/8/8/7P/PP3PP1/4KB2',
+    '2b1k3/pp2pp2/8/8/8/8/PP2PP2/2B1K3',
+    '3k1b2/1pp2p2/8/8/8/8/1PP2P2/3K1B2',
+    'r3k3/1b3ppp/8/8/8/8/1B3PPP/R3K3',
+  ];
+  let boards = fens.map(fen => squaresOf(fen, { white: { b: 0.82 } }));
+  readBoards(boards, { examples });
+  assert.deepEqual(boards.map(placement), fens);
+  // a book that has the start of a game (its own pieces the examples): a white pawn drawn much like its bishops (a
+  // hatched square grows a piece's outline) is read as a bishop — but White has its two
+  const swollen = PIECES.b.map((v, i) => 0.6 * v + 0.4 * PIECES.p[i]);
+  boards = [squaresOf('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR'), squaresOf('4k3/8/8/8/8/2BB4/3P4/4K3', { shapes: { d2: swollen } })];
+  readBoards(boards, { examples: [] });
+  assert.equal(placement(boards[1]), '4k3/8/8/8/8/2BB4/3P4/4K3');
 });
 
 test('a picture’s board with what books put around and on it: coordinates, a move’s squares coloured, coloured dark squares, faint ones', () => {
