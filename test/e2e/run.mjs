@@ -414,7 +414,7 @@ async function main() {
     await page.waitFor(`${item('Queen')}.classList.contains('active') && !${item('Back rank')}.classList.contains('active') && /✓ Done/.test(${item('Back rank')}.innerText) && !/Done/.test(${item('Queen')}.innerText)`, { what: 'the second exercise highlighted, the first still done' });
   });
 
-  await step('book reader: an EPUB and a PDF added, read aloud, the board plays the moves, a move clicked, the place kept', async () => {
+  await step('book reader: an EPUB and a PDF added, read aloud, the board plays the moves, the student’s own move, a move clicked, the place kept', async () => {
     const dir = join(TMP, 'e2e-books');
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dir, { recursive: true });
@@ -426,7 +426,7 @@ async function main() {
     await page.waitFor(`document.querySelectorAll('.book-card').length === 2 && document.querySelector('.book-cover img')`, { timeout: 30000, what: 'the two books, with a cover' });
     // a stand-in for the voice: nothing is said out loud, every part "takes" 100 ms
     await page.eval(`(() => { window.ccSaid = []; speechSynthesis.speak = u => { window.ccSaid.push(u.text); setTimeout(() => u.onend?.(), 100); }; speechSynthesis.cancel = () => {}; return true; })()`);
-    const active = `document.querySelector('.book-side .movelist .active')?.innerText || ''`;
+    const active = `(document.querySelector('.book-side .movelist .active')?.innerText || '')`; // (in brackets: compared with ===)
     await page.click('.book-card', 'EPUB');
     await page.waitFor(`document.querySelectorAll('.bk-flow .bk-m').length === 36`, { timeout: 30000, what: 'the 36 moves marked on the EPUB page' });
     assert(!(await page.eval(`!!document.querySelector('.bk-flow :is(script, style, a, [onclick], [style*="red"])')`)), 'nothing of the book’s own markup on the page');
@@ -439,9 +439,29 @@ async function main() {
     assert(JSON.stringify(said) === '["The Najdorf","Game 1","1. e4","c5","2. knight to f3","d6"]', `said: ${JSON.stringify(said)}`);
     // Stockfish on the reader's board: its evaluation bar and its lines (the Book reader's own switch)
     await page.waitFor(`document.querySelector('.book-side .board-area .eval-bar') && /depth [1-9]/.test(document.querySelector('.book-side .book-engine')?.innerText || '')`, { timeout: 30000, what: 'Stockfish on the reader’s board' });
+    // a move of the student's own on the board: the reading pauses; ▶ Continue reads on, and the board keeps the
+    // student's move until the reading plays the book's next one (a part "takes" 1.5 s here, to look in between)
+    await page.eval(`([...document.querySelectorAll('.bk-flow .bk-m')].find(e => e.textContent === '12.g5').click(), true)`);
+    await page.waitFor(`${active} === 'g5'`, { what: '12.g5 on the board' });
+    await page.eval(`(() => { window.ccSaid = []; speechSynthesis.speak = u => { window.ccSaid.push(u.text); setTimeout(() => u.onend?.(), 1500); }; return true; })()`);
+    await page.click('.book-play');
+    await page.waitFor(`window.ccSaid.length === 1`, { what: 'the reading after 12.g5' });
+    await page.clickSquare('.book-side .board-area .cg-wrap', 'b5');
+    await page.clickSquare('.book-side .board-area .cg-wrap', 'b4');
+    await page.waitFor(`${active} === 'b4' && document.querySelector('.book-play').innerText.includes('Continue')`, { what: 'the student’s move on the board, the reading paused' });
+    await sleep(2000);
+    assert((await page.eval('window.ccSaid.length')) === 1 && (await page.eval(active)) === 'b4', 'nothing more read, the student’s move still on the board');
+    await page.click('.book-play');
+    await page.waitFor(`window.ccSaid.length === 2`, { what: 'the reading going on' });
+    assert((await page.eval(active)) === 'b4', 'the student’s move on the board until the book’s next move');
+    await page.waitFor(`${active} === 'Nd7'`, { timeout: 5000, what: 'the book’s next move on the board' });
+    await page.click('.book-play');
+    const again = await page.eval('window.ccSaid.slice(0, 2)');
+    assert(again[0] === again[1] && /d7/.test(again[0]), `the part it stopped in, said again: ${JSON.stringify(again)}`);
+    await page.eval(`(speechSynthesis.speak = u => { window.ccSaid.push(u.text); setTimeout(() => u.onend?.(), 100); }, true)`);
     // a move clicked on the page: the board shows it; the reading goes on after it (and is kept)
     await page.eval(`([...document.querySelectorAll('.bk-flow .bk-m')].find(e => e.textContent === '10.Bd3').click(), true)`);
-    await page.waitFor(`${active} === 'Bd3'`, { what: 'the variation’s move on the board' });
+    await page.waitFor(`${active} === '10.Bd3'`, { what: 'the variation’s move on the board' }); // (a variation's move: with its number)
     await sleep(500); // (the page marks the new sentence a moment after the board shows the move)
     const at = await page.waitFor(`document.querySelector('.bk-flow .bk-cur')?.textContent`, { what: 'the sentence after it' });
     await go(page, '#/books');
@@ -483,7 +503,7 @@ async function main() {
     await page.setFiles('input[type=file][accept*=".epub"]', [join(dir, 'scanned-book.pdf')]);
     await page.waitFor(`document.querySelectorAll('.book-card').length === 3`, { timeout: 30000, what: 'the scanned book' });
     await page.click('.book-card', 'Scanned');
-    const active = `document.querySelector('.book-side .movelist .active')?.innerText || ''`;
+    const active = `(document.querySelector('.book-side .movelist .active')?.innerText || '')`; // (in brackets: compared with ===)
     // its text: Tesseract's words over the picture, the moves marked (read right, though the OCR takes a 5 for an s)
     await page.waitFor(`document.querySelectorAll('.bk-pdf .textLayer.bk-ocr .bk-m').length >= 13`, { timeout: 120000, what: 'the moves of the scanned page, read by OCR' });
     const words = await page.eval(`document.querySelector('.bk-pdf .textLayer.bk-ocr').innerText.replace(/\\s+/g, ' ')`);
