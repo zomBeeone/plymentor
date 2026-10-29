@@ -12,14 +12,23 @@ async function folder() {
   return root.getDirectoryHandle('books', { create: true });
 }
 
-async function write(name, data) {
-  const handle = await (await folder()).getFileHandle(name, { create: true });
-  const w = await handle.createWritable();
-  await w.write(data);
-  await w.close();
+// The writes go one after the other, and a read waits for the ones under way: a file read while a write replaces it
+// cannot be read (the list of books would leave out the book the reader was saving as the student went back to it).
+let writing = Promise.resolve();
+
+function write(name, data) {
+  const done = writing.then(async () => {
+    const handle = await (await folder()).getFileHandle(name, { create: true });
+    const w = await handle.createWritable();
+    await w.write(data);
+    await w.close();
+  });
+  writing = done.catch(() => {});
+  return done;
 }
 
 async function read(name) {
+  await writing;
   try {
     return await (await (await folder()).getFileHandle(name)).getFile();
   } catch {
@@ -39,6 +48,7 @@ async function readJson(name) {
 
 /** The books, the last opened first: [{ id, format, title, author, size, pages, added, opened, at, progress }]. */
 export async function listBooks() {
+  await writing;
   const dir = await folder();
   const out = [];
   for await (const [name] of dir.entries()) {
