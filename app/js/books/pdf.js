@@ -80,27 +80,89 @@ function boxOn(viewport, b) {
 
 /**
  * The text of page `n` (from 1), see pageText; .scan when the page has (almost) no text — a scanned page, read by OCR
- * (scan.js) —, .picture when it has text and a large picture (a scan with its text, or a picture of diagrams).
+ * (scan.js) —, .picture when it has text and a large picture (a scan with its text, or a picture of diagrams),
+ * .figures when it has pictures shaped like a diagram (see pictureBoxes): where they are, to look for a board in each.
  */
 export async function readPageText(doc, n) {
   const { OPS } = await pdfjs();
   const page = await doc.getPage(n);
   try {
-    const out = pageText(await page.getTextContent(), page.getViewport({ scale: 1 }));
+    const viewport = page.getViewport({ scale: 1 });
+    const out = pageText(await page.getTextContent(), viewport);
     if ((out.text.match(/\p{L}/gu)?.length || 0) < 30) out.scan = true;
     else if (!out.diagrams.length) {
-      const ops = await page.getOperatorList();
-      for (let i = 0; i < ops.fnArray.length && !out.picture; i++) {
-        const fn = ops.fnArray[i];
-        const a = ops.argsArray[i];
-        const size = fn === OPS.paintImageXObject ? a[1] * a[2] : fn === OPS.paintInlineImageXObject || fn === OPS.paintImageMaskXObject ? a[0]?.width * a[0]?.height : 0;
-        if (size >= 800 * 800) out.picture = true;
-      }
+      const pictures = pictureBoxes(await page.getOperatorList(), OPS, viewport);
+      if (pictures.some(p => p.w * p.h >= 800 * 800)) out.picture = true;
+      const figures = diagramShaped(pictures, viewport);
+      if (figures.length) out.figures = figures;
     }
     return out;
   } finally {
     page.cleanup();
   }
+}
+
+const multiply = (m, k) => [m[0] * k[0] + m[2] * k[1], m[1] * k[0] + m[3] * k[1], m[0] * k[2] + m[2] * k[3], m[1] * k[2] + m[3] * k[3], m[0] * k[4] + m[2] * k[5] + m[4], m[1] * k[4] + m[3] * k[5] + m[5]];
+
+/**
+ * Where a page draws its pictures, from its operator list (following the transformations, also of forms): [{ box:
+ * [x0, y0, x1, y1] as shares of the page (`viewport` at scale 1), w, h (the picture's own pixels) }].
+ */
+export function pictureBoxes(ops, OPS, viewport) {
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const stack = [];
+  const out = [];
+  for (let i = 0; i < ops.fnArray.length; i++) {
+    const fn = ops.fnArray[i];
+    const a = ops.argsArray[i];
+    if (fn === OPS.save) stack.push(ctm);
+    else if (fn === OPS.restore) ctm = stack.pop() || ctm;
+    else if (fn === OPS.transform) ctm = multiply(ctm, a);
+    else if (fn === OPS.paintFormXObjectBegin) {
+      stack.push(ctm);
+      if (Array.isArray(a?.[0]) && a[0].length === 6) ctm = multiply(ctm, a[0]);
+    } else if (fn === OPS.paintFormXObjectEnd) ctm = stack.pop() || ctm;
+    else if (fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject || fn === OPS.paintImageMaskXObject) {
+      const w = fn === OPS.paintImageXObject ? a[1] : a[0]?.width;
+      const h = fn === OPS.paintImageXObject ? a[2] : a[0]?.height;
+      if (!(w > 0 && h > 0)) continue;
+      // (a picture fills the unit square of its transformation)
+      const pts = [[0, 0], [1, 0], [0, 1], [1, 1]].map(([u, v]) => viewport.convertToViewportPoint(ctm[0] * u + ctm[2] * v + ctm[4], ctm[1] * u + ctm[3] * v + ctm[5]));
+      const xs = pts.map(p => p[0] / viewport.width);
+      const ys = pts.map(p => p[1] / viewport.height);
+      out.push({ box: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], w, h });
+    }
+  }
+  return out;
+}
+
+/**
+ * The pictures (as pictureBoxes gives them) that may be diagrams: about square, from an eighth of the page's width to
+ * most of it — pictures drawn in strips one under the other (some books cut their diagrams so) joined first. Returns
+ * their boxes, rounded.
+ */
+export function diagramShaped(pictures, viewport) {
+  const near = (a, b) => Math.abs(a - b) < 0.006;
+  const boxes = pictures.filter(p => p.w >= 16 && p.h >= 8).map(p => [...p.box]);
+  for (let joined = true; joined; ) {
+    joined = false;
+    for (let i = 0; i < boxes.length && !joined; i++)
+      for (let j = 0; j < boxes.length && !joined; j++) {
+        const [a, b] = [boxes[i], boxes[j]];
+        if (i === j || !near(a[0], b[0]) || !near(a[2], b[2]) || Math.abs(a[3] - b[1]) > 0.004) continue;
+        boxes[i] = [Math.min(a[0], b[0]), a[1], Math.max(a[2], b[2]), b[3]];
+        boxes.splice(j, 1);
+        joined = true;
+      }
+  }
+  const r = v => Math.round(v * 10000) / 10000;
+  return boxes
+    .filter(([x0, y0, x1, y1]) => {
+      const w = (x1 - x0) * viewport.width;
+      const h = (y1 - y0) * viewport.height;
+      return w >= viewport.width * 0.12 && h >= viewport.width * 0.12 && w <= viewport.width * 0.95 && w / h > 0.7 && w / h < 1.45;
+    })
+    .map(b => b.map(r));
 }
 
 /** The items of page `n`'s text (as pageText gives them) with where each is: box [x0, y0, x1, y1], shares of the page. */

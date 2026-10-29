@@ -15,7 +15,7 @@
 // - "1." of a move that does not start the game being read: a new game from the initial position;
 // - a diagram: the position it shows — one of the game being read, when it is there, else a new game from it.
 import { Tree } from '../tree.js';
-import { posFromFen, uciOf, parseSan, playUci, repKey, INITIAL_FEN } from '../chess.js';
+import { posFromFen, uciOf, parseSan, playUci, repKey, dests, isPromotion, INITIAL_FEN } from '../chess.js';
 import { spokenMove } from './text.js';
 import { descriptiveMoves, spokenDescriptive } from './descriptive.js';
 
@@ -83,15 +83,34 @@ function moveAt(node, san) {
 
 /**
  * The move of the text `t` at `node` (a move read by OCR: the first of its readings that is legal there; one in
- * descriptive notation: the likeliest of the moves it may be), or null.
+ * descriptive notation: the likeliest of the moves it may be; a move whose piece the text lost — `glyph` —: the one
+ * piece that can make it, or the piece the book's glyph has been learnt to be, `t.piece`), or null.
  */
 function playable(node, t) {
   if (t.desc) return descriptiveMoves(node.fen, t.desc)[0] || null;
+  if (t.glyph) {
+    const legal = t.sans.map(san => [san, moveAt(node, san)]).filter(([, uci]) => uci);
+    if (new Set(legal.map(([san]) => san[0])).size === 1) return legal[0][1];
+    return legal.find(([san]) => san[0] === t.piece)?.[1] || null;
+  }
   for (const san of t.sans || [t.san]) {
     const uci = moveAt(node, san);
     if (uci) return uci;
   }
   return null;
+}
+
+/** The legal moves of a position (FEN) as UCI (a pawn reaching the last rank: a queen). */
+function legalMoves(fen) {
+  let pos;
+  try {
+    pos = posFromFen(fen);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const [from, tos] of dests(pos)) for (const to of tos) out.push(`${from}${to}${isPromotion(pos, from, to) ? 'q' : ''}`);
+  return out;
 }
 
 /**
@@ -273,8 +292,53 @@ export class MoveTracker {
       return { tree: this.tree, node: child, shown: false };
     }
     if (t.num === 1 && t.side === 'white') return this.startGame(t);
+    const bridged = !alone && !variation ? this.bridge(t, ahead) : null;
+    if (bridged) return bridged;
     if (!alone) this.lastReal = false;
     return null;
+  }
+
+  /**
+   * A move of the line being read that fits only after a move the text does not show — one it lost (a scan's OCR read
+   * it as something else) or left out —, or after two (both sides' moves of a number): those moves (`bookInferred`),
+   * when they are the only ones after which this move and the moves written after it can be played as written (the
+   * move number, the side, the replies) — at least the next one, and more than after any other. Returns what play
+   * returns, or null.
+   */
+  bridge(t, ahead) {
+    const cur = this.cur;
+    if (!this.tree || !cur || t.desc) return null;
+    const fits = node => (!t.num || fullmove(node) === t.num) && (!t.side || turn(node) === t.side);
+    const found = [];
+    const try1 = (fen, path) => {
+      const node = { fen };
+      if (!fits(node)) return;
+      const uci = playable(node, t);
+      if (uci) found.push({ path, uci, score: followOn(node, uci, ahead) });
+    };
+    const after = cur.fen;
+    for (const m of legalMoves(after)) try1(playUci(after, m)?.fen, [m]);
+    // (two missing: only when one cannot do, and the move's number says so)
+    if (!found.length && t.num && fullmove(cur) === t.num - 1 && turn(cur) === t.side)
+      for (const m of legalMoves(after)) {
+        const mid = playUci(after, m)?.fen;
+        if (mid) for (const n of legalMoves(mid)) try1(playUci(mid, n)?.fen, [m, n]);
+      }
+    if (!found.length) return null;
+    const best = Math.max(...found.map(f => f.score));
+    const top = found.filter(f => f.score === best);
+    if (best < 1 || top.length !== 1) return null;
+    let node = cur;
+    for (const m of top[0].path) {
+      node = this.tree.addMove(node, m).node;
+      node.bookInferred = true;
+      node.bookShown = false;
+    }
+    const child = this.tree.addMove(node, top[0].uci).node;
+    child.bookShown = false;
+    this.cur = child;
+    this.lastReal = true;
+    return { tree: this.tree, node: child, shown: false };
   }
 
   /**
@@ -381,6 +445,23 @@ export class BookMoves {
     this.tracker = new MoveTracker();
     this.gap = ''; // the text after the last move, up to the next unit
     this.prev = null; // the last move followed
+    this.glyphs = new Map(); // a lost figurine's glyph → { piece letter: moves where only that piece could go }
+  }
+
+  /** The piece a lost figurine's glyph is, once the book's moves have shown it clearly (twice, and twice as often). */
+  pieceOf(glyph) {
+    const seen = [...(this.glyphs.get(glyph) || new Map())].sort((a, b) => b[1] - a[1]);
+    return seen[0] && seen[0][1] >= 2 && seen[0][1] >= 2 * (seen[1]?.[1] || 0) ? seen[0][0] : null;
+  }
+
+  /** A lost figurine's move was played where only one piece could make it: that piece is what the glyph stands for. */
+  learn(t) {
+    const legal = new Set(t.sans.filter(san => moveAt(t.node.parent, san)).map(san => san[0]));
+    if (legal.size !== 1) return;
+    const seen = this.glyphs.get(t.glyph) || new Map();
+    const [piece] = legal;
+    seen.set(piece, (seen.get(piece) || 0) + 1);
+    this.glyphs.set(t.glyph, seen);
   }
 
   get trees() {
@@ -414,9 +495,11 @@ export class BookMoves {
       for (let j = i + 1, end = t.end; j < unit.moves.length && ahead.length < 8; end = unit.moves[j++].end) ahead.push({ t: unit.moves[j], between: unit.text.slice(end, unit.moves[j].start) });
       // (a paragraph begins: after a sentence's end and a line break, or a blank line)
       const para = /(?:[.!?…]["'”’)\]]*[ \t]*\n|\n[ \t]*\n)\s*$/.test(between);
+      for (const a of [t, ...ahead.map(x => x.t)]) if (a.glyph) a.piece = this.pieceOf(a.glyph);
       const r = this.tracker.play(t, { seq: reply, ahead, para, between });
       t.tree = r?.tree || null;
       t.node = r?.node || null;
+      if (t.glyph && t.node?.parent) this.learn(t);
       t.shown = !!r?.shown;
       t.restated = !!r?.restated;
       // (a move read by OCR or written in descriptive notation: said as the move that was played — or, in descriptive

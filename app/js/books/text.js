@@ -32,7 +32,10 @@ export function findMoves(text, { ocr = false } = {}) {
   const overlap = (a, b) => a.start < b.end && a.end > b.start;
   // (a move spelled out holds its square: "knight to f3" is one move, not a pawn's)
   const outside = t => !spelled.some(s => overlap(s, t));
-  const strict = strictMoves(text).filter(outside);
+  const lettered = strictMoves(text).filter(outside);
+  // (a lost figurine before a square: a piece's move, not the pawn move the square alone would be)
+  const glyphs = glyphMoves(text, lettered).filter(outside);
+  const strict = [...lettered.filter(t => !glyphs.some(g => overlap(g, t))), ...glyphs].sort((a, b) => a.start - b.start);
   const moves = (ocr ? ocrMoves(text, strict) : strict).filter(outside);
   const desc = findDescriptive(text).filter(d => outside(d) && !strict.some(t => overlap(t, d)));
   if (!desc.length && !spelled.length) return moves;
@@ -126,6 +129,47 @@ function ocrMoves(text, strict) {
     });
   }
   return all.filter(t => !t.ocr || t.sure);
+}
+
+// Figurines a PDF's text has lost: a book's figurine font without Unicode for its glyphs, or a scanner's OCR of them,
+// gives other characters where the piece's letter goes ("�e5", "i.f6", "ttld1") — the same ones for the same piece
+// throughout the book. Such a short word right before a square, where a move stands (after a move number or Black's
+// dots, or next to another move), is a move of an unknown piece (`glyph`: the word): its readings are each piece's
+// moves there (with the word's last letter or digit as the piece's file or rank, too); moves.js plays the one that is
+// legal, and learns from the moves only one piece could make which piece the word is.
+const GLYPH_MOVE = new RegExp(
+  '(?<![\\p{L}\\p{N}])(?:(?<num>\\d{1,3})(?<dots>\\s?(?:\\.\\s?){1,4}|\\s?…\\s?|\\s)|(?<bdots>\\.{2,3}|…)\\s?)?' +
+    '(?<glyph>[^\\s\\p{N}()[\\]{},;:]{1,3}?)(?<x>[x:×]?)(?<sq>[a-h][1-8])(?<chk>[+#†]{0,2})(?<nag>[!?]{1,2})?(?![\\p{L}\\p{N}])',
+  'gu',
+);
+
+function glyphMoves(text, strict) {
+  const found = [];
+  for (const m of text.matchAll(GLYPH_MOVE)) {
+    const g = m.groups;
+    // (a piece's letter or figurine is no lost glyph: strictMoves reads it; nor a pawn's file before its capture —
+    // "exd5" —, nor a word's end, nor brackets or quotes)
+    if (/^[KQRBN♔-♞]$/.test(g.glyph) || /^[KQRBN][a-h1-8]$/.test(g.glyph) || /^[a-h]$/.test(g.glyph) || /^[.…]/.test(g.glyph) || /^[a-z]{3}$/.test(g.glyph) || /["“”‘’]/.test(g.glyph)) continue;
+    const start = m.index;
+    const end = start + m[0].length;
+    if (strict.some(t => t.start < end && t.end > start && !t.pawn)) continue;
+    const num = g.num ? Number(g.num) : null;
+    const extra = /[a-h1-8]$/.test(g.glyph) && g.glyph.length > 1 ? ['', g.glyph.slice(-1)] : [''];
+    const sans = [...'NBRQK'].flatMap(p => extra.map(d => `${p}${d}${g.x ? 'x' : ''}${g.sq}`));
+    const side = num ? ((g.dots.match(/\.|…/g) || []).length >= 2 || g.dots.includes('…') ? 'black' : 'white') : g.bdots ? 'black' : null;
+    found.push({ start, end, num, side, san: sans[0], sans, glyph: g.glyph.replace(/[a-h1-8]$/, d => (extra.length > 1 ? '' : d)), check: g.chk ? '+' : '', pawn: false, square: false, ocr: true, words: text.slice(start, end), sure: !!num || !!g.bdots });
+  }
+  // the others only next to a move (with no more than a space, a comma or a bracket between them)
+  const all = [...strict, ...found].sort((a, b) => a.start - b.start);
+  const near = (a, b) => /^[\s,;()[\]]{0,3}$/.test(text.slice(Math.min(a.end, b.end), Math.max(a.start, b.start)));
+  for (let changed = true; changed; ) {
+    changed = false;
+    all.forEach((t, i) => {
+      if (!t.glyph || t.sure) return;
+      if ((all[i - 1] && (!all[i - 1].glyph || all[i - 1].sure) && near(all[i - 1], t)) || (all[i + 1] && (!all[i + 1].glyph || all[i + 1].sure) && near(t, all[i + 1]))) changed = t.sure = true;
+    });
+  }
+  return found.filter(t => t.sure);
 }
 
 const PIECE_WORDS = { K: 'king', Q: 'queen', R: 'rook', B: 'bishop', N: 'knight' };

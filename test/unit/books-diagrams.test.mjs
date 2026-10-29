@@ -2,12 +2,12 @@
 // read by the book's own pieces, a scanned page's text from its OCR, and the board following the diagrams.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fontBoards, findBoards, findPictureBoard, packBoard, unpackBoard, readBoards, placement, pieceExample } from '../../app/js/books/diagrams.js';
-import { pageText } from '../../app/js/books/pdf.js';
+import { fontBoards, findBoards, findPictureBoard, findFigureBoards, grayFrom, packBoard, unpackBoard, readBoards, placement, pieceExample } from '../../app/js/books/diagrams.js';
+import { pageText, pictureBoxes, diagramShaped } from '../../app/js/books/pdf.js';
 import { ocrText } from '../../app/js/books/ocr.js';
 import { findMoves, findSentences, spokenParts } from '../../app/js/books/text.js';
 import { BookMoves } from '../../app/js/books/moves.js';
-import { drawBoard, drawPlainBoard, blankPage, pieceSquares } from './diagram-picture.mjs';
+import { drawBoard, drawPlainBoard, drawCoordinates, drawText, blankPage, pieceSquares } from './diagram-picture.mjs';
 
 // A PDF page's text items: a line of text, a board in a chess font (each row twice, in two fonts, as some books set
 // them, with line ends between the rows), its side-to-move mark, and the text under it.
@@ -41,6 +41,75 @@ test('a board set in a chess font: its position, its side to move, and none of i
   // every item keeps its span (the board's rows empty)
   assert.equal(page.items.length, bookPage().length);
   assert.equal(page.items.filter(i => i.skip).length, 8 * 3 + 1 - 1);
+});
+
+// A FEN placement's rows in a chess font's characters, a8 a light square: TeX's (the case is the piece's colour, the
+// letter the square's: P N B R Q K on light squares, O M A S L J on dark ones; 0 and Z the empty squares), or an
+// Alpha's (small letters on light squares, capitals on dark ones; its empty squares "*" and "+")
+function fontRows(fen, font) {
+  return fen.split('/').map((row, rank) =>
+    [...row.replace(/\d/g, d => '.'.repeat(Number(d)))]
+      .map((p, file) => {
+        const light = !((rank + file) & 1);
+        const type = p.toLowerCase();
+        if (font === 'tex') {
+          if (p === '.') return light ? '0' : 'Z';
+          const ch = light ? type : 'omaslj'['pnbrqk'.indexOf(type)];
+          return p === type ? ch : ch.toUpperCase();
+        }
+        if (p === '.') return light ? '*' : '+';
+        const ch = p === type ? { k: 'l', q: 'w', r: 't', b: 'v', n: 'm', p: 'o' }[type] : type;
+        return light ? ch : ch.toUpperCase();
+      })
+      .join(''),
+  );
+}
+
+test('boards in the other chess fonts: TeX’s, with its coordinates (not read aloud); an Alpha’s, drawn square by square', () => {
+  const fen = 'r1bqk2r/pp2bppp/2n1pn2/3p4/2PP4/2N2N2/PP2BPPP/R1BQK2R';
+  const viewport = { width: 500, height: 700, convertToViewportPoint: (x, y) => [x, 700 - y] };
+  // TeX: a row per item, a rank's digit left of it, the files' letters under the board
+  const tex = [item('Black to play.', 60, 520)];
+  fontRows(fen, 'tex').forEach((r, i) => tex.push(item(String(8 - i), 84, 403 - i * 14, { height: 7, width: 4 }), item(r, 94, 400 - i * 14, { height: 14, width: 112, fontName: 'skak' })));
+  tex.push(item('a b c d e f g h', 96, 290, { height: 7, width: 108 }), item('8...O-O 9.O-O', 60, 260));
+  let page = pageText({ items: tex }, viewport);
+  assert.equal(page.text, 'Black to play.\n8...O-O 9.O-O\n');
+  assert.deepEqual(page.diagrams.map(d => [d.at, d.placement]), [['Black to play.\n'.length, fen]]);
+  // Alpha: each square an item of its own, "*" the empty light square
+  const alpha = [item('The position:', 60, 520)];
+  fontRows(fen, 'alpha').forEach((r, i) => [...r].forEach((ch, f) => alpha.push(item(ch, 94 + f * 14, 400 - i * 14, { height: 14, width: 14, fontName: 'alpha', hasEOL: f === 7 }))));
+  page = pageText({ items: alpha }, viewport);
+  assert.equal(page.text, 'The position:\n');
+  assert.deepEqual(page.diagrams.map(d => d.placement), [fen]);
+});
+
+test('a PDF page’s pictures: where it draws them, and the ones shaped like a diagram (one cut in strips joined)', () => {
+  const OPS = { save: 1, restore: 2, transform: 3, paintFormXObjectBegin: 4, paintFormXObjectEnd: 5, paintImageXObject: 6, paintInlineImageXObject: 7, paintImageMaskXObject: 8 };
+  const viewport = { width: 600, height: 800, convertToViewportPoint: (x, y) => [x, 800 - y] };
+  const ops = { fnArray: [], argsArray: [] };
+  const op = (fn, args = []) => {
+    ops.fnArray.push(fn);
+    ops.argsArray.push(args);
+  };
+  const picture = (matrix, paint) => {
+    op(OPS.save);
+    op(OPS.transform, matrix);
+    paint();
+    op(OPS.restore);
+  };
+  // a diagram: a picture 240 points square, its corner at (60, 480)
+  picture([240, 0, 0, 240, 60, 480], () => op(OPS.paintImageXObject, ['img1', 800, 800]));
+  // one in a form moved right, cut in three strips one under the other
+  op(OPS.paintFormXObjectBegin, [[1, 0, 0, 1, 300, 0], [0, 0, 240, 240]]);
+  for (const k of [0, 1, 2]) picture([240, 0, 0, 80, 0, 400 - k * 80], () => op(OPS.paintImageXObject, [`strip${k}`, 600, 200]));
+  op(OPS.paintFormXObjectEnd);
+  // not diagrams: a photo across the page, a figurine in a line of text
+  picture([560, 0, 0, 200, 20, 40], () => op(OPS.paintImageXObject, ['photo', 1400, 500]));
+  picture([9, 0, 0, 9, 100, 300], () => op(OPS.paintInlineImageXObject, [{ width: 24, height: 24 }]));
+  const pictures = pictureBoxes(ops, OPS, viewport);
+  assert.deepEqual(pictures[0], { box: [0.1, 0.1, 0.5, 0.4], w: 800, h: 800 });
+  assert.equal(pictures.length, 6);
+  assert.deepEqual(diagramShaped(pictures, viewport), [[0.1, 0.1, 0.5, 0.4], [0.5, 0.4, 0.9, 0.7]]);
 });
 
 /** A unit (a page) with diagrams, followed by a book's moves; returns the unit. */
@@ -201,4 +270,57 @@ test('a side without its king gets the piece most like one (its colour misread o
   const b = unpackBoard(JSON.parse(JSON.stringify(packBoard(findPictureBoard(img)))));
   readBoards([b], { examples: pieceSquares(64).map(p => pieceExample(p.type, p.img)) });
   assert.equal(placement(b), '4k3/8/8/8/8/8/8/R3K3');
+});
+
+test('a picture’s board with what books put around and on it: coordinates, a move’s squares coloured, coloured dark squares, faint ones', () => {
+  const examples = pieceSquares(64).map(p => pieceExample(p.type, p.img));
+  const pictures = [
+    // its coordinates beside and under it
+    { fen: 'r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R', coords: true },
+    // the last move's squares coloured, darker than the dark squares (the ink of the pawn on one darker still)
+    { fen: 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR', marks: { e2: [140, 160], e4: [120, 160] } },
+    // dark squares of a colour (a green), light ones a pale one
+    { fen: '6k1/5ppp/8/8/8/8/1Q3PPP/6K1', dark: 140, light: 236, darkSat: 110, lightSat: 30 },
+    // faint squares
+    { fen: 'r4rk1/1pp2ppp/p1n5/3q4/3P4/2P2N2/P4PPP/R2Q1RK1', dark: 222, light: 252 },
+  ];
+  const boards = pictures.map(({ fen, coords, ...opts }, i) => {
+    const img = blankPage(480, 480, { sat: true });
+    drawPlainBoard(img, 40, 16, 52, fen, opts);
+    if (coords) drawCoordinates(img, 40, 16, 52);
+    const b = findPictureBoard(img);
+    assert.ok(b, `picture ${i}: a board`);
+    assert.ok(Math.abs(b.x - 40) < 6 && Math.abs(b.y - 16) < 6 && Math.abs(b.width - 416) < 12, `picture ${i}: ${b.x},${b.y} ${b.width}`);
+    return unpackBoard(JSON.parse(JSON.stringify(packBoard(b))));
+  });
+  readBoards(boards, { examples });
+  assert.deepEqual(boards.map(placement), pictures.map(p => p.fen));
+  // (a picture's saturation, from its colours: none for a grey, all for a pure colour)
+  const g = grayFrom(Uint8ClampedArray.from([128, 128, 128, 255, 255, 0, 0, 255, 240, 217, 181, 255]), 3, 1);
+  assert.deepEqual([[...g.data], [...g.sat]], [[128, 76, 219], [0, 255, 63]]);
+});
+
+test('a scanned page’s boards: in a frame, whatever its squares, and hatched — each once; a figure’s board on a page of text', () => {
+  const examples = pieceSquares(64).map(p => pieceExample(p.type, p.img));
+  const fens = ['r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R', '8/8/4k3/8/2R5/8/4K3/8'];
+  const page = blankPage(1100, 1500);
+  drawText(page, 80, 60, 940, 8);
+  drawPlainBoard(page, 150, 300, 50, fens[0]);
+  drawText(page, 80, 760, 940, 4);
+  drawBoard(page, 600, 900, 50, fens[1]);
+  drawText(page, 80, 1340, 940, 5);
+  const at = (b, x, y) => Math.abs(b.x - x) < 6 && Math.abs(b.y - y) < 6 && Math.abs(b.width - 400) < 12;
+  const scan = findFigureBoards(page, [], { whole: true });
+  assert.equal(scan.length, 2, scan.map(b => `${b.x},${b.y} ${b.width}`).join(' | '));
+  assert.ok(at(scan[0], 150, 300) && at(scan[1], 600, 900), scan.map(b => `${b.x},${b.y} ${b.width}`).join(' | '));
+  const boards = scan.map(packBoard).map(unpackBoard);
+  readBoards(boards, { examples });
+  assert.deepEqual(boards.map(placement), fens);
+  // a PDF's figure (where the page draws a picture): its board, and nothing else looked for on the page — unless a
+  // figure shows none
+  const figure = [140 / 1100, 290 / 1500, 560 / 1100, 710 / 1500];
+  const found = findFigureBoards(page, [figure], { whole: false });
+  assert.equal(found.length, 1);
+  assert.ok(at(found[0], 150, 300));
+  assert.equal(findFigureBoards(page, [figure, [0.05, 0.03, 0.95, 0.15]], { whole: false }).length, 2);
 });

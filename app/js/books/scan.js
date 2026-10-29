@@ -70,16 +70,18 @@ export class Scanner {
   }
 
   /**
-   * Scans page `n` (from 1) on `lane`: its boards, and its words when `ocr` (not for a page with its own text).
+   * Scans page `n` (from 1) on `lane`: its boards, and its words when `ocr` (not for a page with its own text) — the
+   * boards in its pictures shaped like diagrams (`figures`, boxes as shares of the page: pdf.js readPageText), and
+   * hatched ones anywhere on it when `whole` (a scan, a large picture). A page with only figures is drawn at 200 dpi.
    * Returns { text, items, diagrams: [{ at, box, board (what is on its squares, to read with the book's others) }] }.
    */
-  async page(n, lane = 0, { ocr = true } = {}) {
-    const canvas = await renderPage(this.doc, n);
+  async page(n, lane = 0, { ocr = true, figures = null, whole = true } = {}) {
+    const canvas = await renderPage(this.doc, n, { dpi: whole || ocr ? 300 : 200 });
     try {
       const { width, height } = canvas;
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       const rgba = ctx.getImageData(0, 0, width, height).data;
-      const { boards } = await this.call({ op: 'find', rgba: rgba.buffer, width, height }, [rgba.buffer]);
+      const { boards } = await this.call({ op: 'find', rgba: rgba.buffer, width, height, figures: figures || [], whole }, [rgba.buffer]);
       // (the boards blanked out: their pieces are read as letters otherwise)
       ctx.fillStyle = '#fff';
       for (const b of boards) {

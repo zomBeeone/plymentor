@@ -121,6 +121,36 @@ test('the board follows the book: a position it cannot know, and a game from a d
   assert.deepEqual(track('21.Nf5 gxf5 22.Qg3+').list, ['-', '-', '-']);
 });
 
+test('the board follows the book: a move the text lost (misread by a scan) put back when only it lets the moves after it be played', () => {
+  // "dxc6" misread: of Black's moves, only 4...dxc6 lets 5.d4 exd4 6.Qxd4 Qxd4 7.Nxd4 Bd7 be played
+  let r = track('1.e4 e5 2.Nf3 Nc6 3.Bb5 a6 4.Bxc6 dx¢6 5.d4 exd4 6.Qxd4 Qxd4 7.Nxd4 Bd7');
+  assert.deepEqual(r.list, ['e4@0', 'e5@1', 'Nf3@2', 'Nc6@3', 'Bb5@4', 'a6@5', 'Bxc6@6', 'd4@8', 'exd4@9', 'Qxd4@10', 'Qxd4@11', 'Nxd4@12', 'Bd7@13']);
+  const lost = r.moves[7].node.parent;
+  assert.deepEqual([lost.san, lost.bookInferred, lost.bookShown], ['dxc6', true, false]);
+  // more than one move would do: none is put in
+  r = track('1.e4 e5 2.Nf3 N?6 3.Bb5 a6');
+  assert.deepEqual(r.list, ['e4@0', 'e5@1', 'Nf3@2', '-', '-']);
+});
+
+test('moves whose figurine the PDF lost: played as the one piece that can make them, then as the piece the book’s glyph has shown it is', () => {
+  // (a figurine font without Unicode for its glyphs: its knight comes out as one character, its bishop as another)
+  const N = '';
+  const B = '';
+  const text = `1.${N}f3 ${N}f6 2.c4 g6 3.${N}c3 ${B}g7 4.e4 d6 5.d4 O-O 6.${N}e2 ${N}bd7`;
+  const r = track(text);
+  assert.deepEqual(r.list, ['Nf3@0', 'Nf6@1', 'c4@2', 'g6@3', 'Nc3@4', 'Bg7@5', 'e4@6', 'd6@7', 'd4@8', 'O-O@9', 'Ne2@10', 'Nbd7@11']);
+  // (6.Ne2: a bishop, the queen and the king could go there too — the knight, as the glyph has been three times)
+  assert.deepEqual(
+    r.moves.filter(m => m.glyph).map(m => m.words),
+    ['1. knight to f3', 'knight to f6', '3. knight to c3', 'bishop to g7', '6. knight to e2', 'knight from b to d7'],
+  );
+  // not known yet, and more than one piece can go there: not played
+  assert.deepEqual(track(`1.e4 e5 2.${N}f3`).list, ['e4@0', 'e5@1', '-']);
+  // what is no lost figurine: a pawn's capture, Black's dots, a word, a piece's letter
+  assert.deepEqual(moves('1.d4 d5 2.c4 dxc4 3.e3 b5 ...e6 4.a4 Nc6'), ['1.d4', 'd5', '2.c4', 'dxc4', '3.e3', 'b5', '...e6', '4.a4', 'Nc6']);
+  assert.ok(findMoves('He went to e4 and Nf3 then.').every(m => !m.glyph));
+});
+
 test('descriptive notation: compact, spaced and old-style moves, castling, checks, captures named by what they take', () => {
   const said = text => findMoves(text).map(m => m.words);
   assert.deepEqual(said('1. P-K4 P-K4 2. Kt-KB3 Kt-QB3 3. B-N5 PxP e.p. 4. QxQ ch K-B1 5. Castles (Q R)'), [

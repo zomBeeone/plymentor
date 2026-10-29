@@ -69,12 +69,20 @@ export function drawBoard(img, x0, y0, size, placement) {
 /**
  * Draws a board the way ebooks show them, at (x0, y0), squares of `size` pixels: dark squares of a plain tone (`dark`:
  * grey, or a colour's grey), light ones `light`, a thin frame, a FEN placement on it (white pieces outlined, black ones
- * solid).
+ * solid). A picture with a saturation (`img.sat`) gets the squares' (`darkSat`, `lightSat`: a colour's); `marks`
+ * colours squares to mark them (a move's): { e4: [tone, saturation] }.
  */
-export function drawPlainBoard(img, x0, y0, size, placement, { dark = 170, light = 245 } = {}) {
+export function drawPlainBoard(img, x0, y0, size, placement, { dark = 170, light = 245, darkSat = 0, lightSat = 0, marks = {} } = {}) {
   const rows = placement.split('/').map(r => r.replace(/\d/g, d => '.'.repeat(Number(d))));
   const n = size * 8;
-  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) img.data[(y0 + y) * img.width + x0 + x] = (Math.floor(x / size) + Math.floor(y / size)) % 2 === 1 ? dark : light;
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      const [c, r] = [Math.floor(x / size), Math.floor(y / size)];
+      const mark = marks[`${'abcdefgh'[c]}${8 - r}`];
+      const i = (y0 + y) * img.width + x0 + x;
+      img.data[i] = mark ? mark[0] : (c + r) % 2 === 1 ? dark : light;
+      if (img.sat) img.sat[i] = mark ? mark[1] : (c + r) % 2 === 1 ? darkSat : lightSat;
+    }
   for (let k = -2; k < n + 2; k++)
     for (let t = 1; t <= 2; t++) for (const [x, y] of [[x0 + k, y0 - t], [x0 + k, y0 + n + t - 1], [x0 - t, y0 + k], [x0 + n + t - 1, y0 + k]]) img.data[y * img.width + x] = 0;
   rows.forEach((row, r) =>
@@ -97,7 +105,43 @@ export function pieceSquares(size) {
   });
 }
 
-/** A white page (width × height, grey pixels). */
-export function blankPage(width, height) {
-  return { width, height, data: new Uint8Array(width * height).fill(255) };
+/** A white page (width × height, grey pixels; with a saturation, all grey, when `sat`). */
+export function blankPage(width, height, { sat = false } = {}) {
+  return { width, height, data: new Uint8Array(width * height).fill(255), ...(sat ? { sat: new Uint8Array(width * height) } : {}) };
+}
+
+function fillRect(img, x0, y0, w, h, v) {
+  for (let y = Math.max(0, y0); y < Math.min(img.height, y0 + h); y++) for (let x = Math.max(0, x0); x < Math.min(img.width, x0 + w); x++) img.data[y * img.width + x] = v;
+}
+
+/**
+ * The coordinates printed around a board drawn at (x0, y0), squares of `size` pixels: a digit left of each rank (a
+ * stroke with a foot), a letter under each file (a small ring).
+ */
+export function drawCoordinates(img, x0, y0, size) {
+  const g = Math.max(6, Math.round(size * 0.24)); // (a glyph's height)
+  for (let k = 0; k < 8; k++) {
+    const dx = x0 - Math.round(size * 0.35);
+    const dy = y0 + k * size + Math.round((size - g) / 2);
+    fillRect(img, dx, dy, 2, g, 0);
+    fillRect(img, dx - 2, dy + g - 2, 6, 2, 0);
+    const lx = x0 + k * size + Math.round((size - g) / 2);
+    const ly = y0 + 8 * size + Math.round(size * 0.2);
+    fillRect(img, lx, ly, g, g, 0);
+    fillRect(img, lx + 2, ly + 2, g - 4, g - 4, 255);
+  }
+}
+
+/** Lines of text (words of letters: stems with a bar on top) from (x0, y0), `width` pixels wide, `count` of them. */
+export function drawText(img, x0, y0, width, count, pitch = 24) {
+  const h = Math.round(pitch * 0.45);
+  for (let l = 0, k = 0; l < count; l++)
+    for (let x = x0; x < x0 + width; k++) {
+      const w = Math.min(20 + ((k * 37) % 60), x0 + width - x);
+      for (let cx = x; cx < x + w - 4; cx += 6) {
+        fillRect(img, cx, y0 + l * pitch, 2, h, 30);
+        fillRect(img, cx, y0 + l * pitch, 5, 2, 30);
+      }
+      x += w + 12;
+    }
 }

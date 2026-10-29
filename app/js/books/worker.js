@@ -1,13 +1,15 @@
 // The Book reader's worker for diagrams (bundled as /js/bookscan.js): finds the boards in a scanned page's picture or
 // in an EPUB's picture, and reads the positions of a book's boards (diagrams.js), away from the window.
-import { grayFrom, findBoards, findPictureBoard, packBoard, unpackBoard, readBoards, placement, pieceExample } from './diagrams.js';
+import { grayFrom, findBoards, findFigureBoards, findPictureBoard, packBoard, unpackBoard, readBoards, placement, pieceExample } from './diagrams.js';
 
 self.onmessage = e => {
   const { id, op } = e.data;
   try {
     if (op === 'find') {
+      // a page: the boards in its pictures shaped like diagrams, and hatched ones anywhere on it (whole: a scan)
       const img = grayFrom(new Uint8Array(e.data.rgba), e.data.width, e.data.height);
-      const boards = findBoards(img).map(b => ({ x: b.x, y: b.y, width: b.width, height: b.height, board: packBoard(b) }));
+      const found = findFigureBoards(img, e.data.figures || [], { whole: e.data.whole !== false });
+      const boards = found.map(b => ({ x: b.x, y: b.y, width: b.width, height: b.height, board: packBoard(b) }));
       self.postMessage({ id, boards });
     } else if (op === 'picture') {
       const b = findPictureBoard(grayFrom(new Uint8Array(e.data.rgba), e.data.width, e.data.height));

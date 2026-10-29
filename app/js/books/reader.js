@@ -13,7 +13,7 @@ import { Scanner } from './scan.js';
 import { bookFile, loadCache, saveCache } from './library.js';
 import { startReading, prepareReading, cancelReading, readAloud, stopSpeaking } from '../voice.js';
 
-const TEXT_CACHE = 2; // the version of what is kept of a PDF's pages (pdf.js's version goes with it)
+const TEXT_CACHE = 3; // the version of what is kept of a PDF's pages (pdf.js's version goes with it)
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 
 function makeUnit(index, title, text, more) {
@@ -294,7 +294,7 @@ export async function openBook(meta) {
         page = pages[n - 1] = await readPageText(doc, n);
         dirty = true;
       }
-      if ((page.scan || page.picture) && !page.scanned) scans.push(n - 1);
+      if ((page.scan || page.picture || page.figures) && !page.scanned) scans.push(n - 1);
       else book.add(pageUnit(n - 1, page));
       if (n % 25 === 0) await pause(); // (pages kept from before come all at once: the window goes on meanwhile)
     }
@@ -330,7 +330,7 @@ async function scanPages(book, pages, todo, save) {
       while (batch.length < scanner.lanes && pending.size) batch.push(take());
       const results = await Promise.all(
         batch.map((u, lane) =>
-          scanner.page(u + 1, lane, { ocr: !!pages[u].scan }).catch(e => {
+          scanner.page(u + 1, lane, { ocr: !!pages[u].scan, figures: pages[u].figures, whole: !!(pages[u].scan || pages[u].picture) }).catch(e => {
             console.warn(`page ${u + 1} could not be scanned:`, e);
             return null;
           }),
