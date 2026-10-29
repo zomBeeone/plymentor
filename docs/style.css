@@ -40,10 +40,43 @@ h1 { margin: 0 0 20px; font-size: clamp(36px, 6.2vw, 62px); line-height: 1.07; l
 .meta { margin: 14px 0 0; color: var(--muted); font-size: 15px; }
 .meta a { color: var(--text); }
 
-.shot { margin-top: 28px; margin-bottom: 0; }
-.shot-more { margin-top: 56px; }
-.shot img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55); }
+/* The screenshots: a track of slides moved by the checked radio button (no scripts). The view clips the other slides
+   at its sides (overflow-x: clip keeps the shadow below; older browsers fall back to hidden). The radios are fixed:
+   a click on an arrow focuses one, and a radio always on screen never scrolls the page. */
+.shots { position: relative; margin-top: 28px; }
+.shots-radio { position: fixed; top: 50%; left: 0; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+.shots-view { overflow: hidden; }
+@supports (overflow-x: clip) {
+  .shots-view { overflow: visible; overflow-x: clip; }
+}
+.shots-track { display: flex; align-items: flex-start; gap: 120px; transition: transform 0.5s cubic-bezier(0.22, 0.7, 0.25, 1); }
+#shot-2:checked ~ .shots-view .shots-track { transform: translateX(calc(-100% - 120px)); }
+#shot-3:checked ~ .shots-view .shots-track { transform: translateX(calc(-200% - 240px)); }
+.shot { flex: 0 0 100%; min-width: 0; margin: 0; }
+.shot img { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55); }
 figcaption { margin-top: 14px; color: var(--muted); font-size: 14px; text-align: center; }
+
+/* the arrows: over the screenshot's edges, outside it when the window is wide; only the current slide's pair */
+.shots-arrows { position: absolute; top: 0; left: 20px; right: 20px; aspect-ratio: 1120 / 636; pointer-events: none; }
+.arrow { position: absolute; top: 50%; display: none; align-items: center; justify-content: center; width: 52px; height: 52px; margin-top: -26px; border: 1px solid var(--border); border-radius: 50%; background: rgba(22, 21, 18, 0.82); color: var(--strong); box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5); cursor: pointer; pointer-events: auto; transition: background 0.15s, transform 0.15s; }
+.arrow:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.arrow.prev { left: 12px; }
+.arrow.next { right: 12px; }
+.arrow.prev:hover { transform: translateX(-2px); }
+.arrow.next:hover { transform: translateX(2px); }
+#shot-1:checked ~ .shots-arrows .at-1, #shot-2:checked ~ .shots-arrows .at-2, #shot-3:checked ~ .shots-arrows .at-3 { display: flex; }
+@media (min-width: 1300px) {
+  .arrow.prev { left: -76px; }
+  .arrow.next { right: -76px; }
+  .shots-view { margin: 0 -60px; padding: 0 60px; } /* room for the shadow at the sides */
+}
+
+/* the dots: which one is shown, and a way to any of them */
+.shots-dots { display: flex; justify-content: center; gap: 12px; margin-top: 18px; }
+.shots-dots label { width: 10px; height: 10px; border-radius: 50%; background: var(--border); cursor: pointer; transition: background 0.15s, transform 0.15s; }
+.shots-dots label:hover { background: var(--muted); }
+#shot-1:checked ~ .shots-dots [for='shot-1'], #shot-2:checked ~ .shots-dots [for='shot-2'], #shot-3:checked ~ .shots-dots [for='shot-3'] { background: var(--accent-hi); transform: scale(1.25); }
+#shot-1:focus-visible ~ .shots-dots [for='shot-1'], #shot-2:focus-visible ~ .shots-dots [for='shot-2'], #shot-3:focus-visible ~ .shots-dots [for='shot-3'] { outline: 2px solid var(--accent-hi); outline-offset: 4px; }
 
 h2 { margin: 0 0 24px; font-size: clamp(26px, 3.6vw, 34px); letter-spacing: -0.01em; }
 .features { padding-top: 84px; padding-bottom: 88px; }
@@ -64,8 +97,13 @@ h2 { margin: 0 0 24px; font-size: clamp(26px, 3.6vw, 34px); letter-spacing: -0.0
   .hide-narrow { display: none; }
   .hero { padding-top: 44px; }
   .download { padding: 14px 24px; font-size: 18px; }
+  .arrow { width: 40px; height: 40px; margin-top: -20px; }
+  .arrow svg { width: 20px; height: 20px; }
+  .arrow.prev { left: 6px; }
+  .arrow.next { right: 6px; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .download { transition: none; }
+  .shots-track { transition: none; }
 }
