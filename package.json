@@ -1,7 +1,7 @@
 {
   "name": "plymentor",
   "productName": "Plymentor",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "description": "Plymentor by Studio Nox: chess training desktop app with an AI coach (Claude Code, Codex or Antigravity CLI with your own subscription), Stockfish, your games and the coach's voice, all on your computer",
   "author": "Studio Nox",
