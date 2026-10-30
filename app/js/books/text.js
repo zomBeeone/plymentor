@@ -107,16 +107,17 @@ function strictMoves(text) {
 }
 
 // A scanned page's moves: the OCR often reads a digit as a letter — 4 as a, d, g or q; 5 as s, b or S (S for 8 too);
-// 6 as é, b or G; 1 as l, i or I; 2 as z; 8 as B or & —, f as £ or {, c as ¢, a check as t, and castling with zeros.
+// 6 as é, b or G; 1 as l, i or I; 2 as z; 8 as B or & —, f as £ or {, c or e as ¢, e as €, a check as t, and castling
+// with zeros.
 // Such a word, where it stands among moves (after a move number, or next to another move; a capture with a digit
 // anywhere — "fixed" is a word —; not a square of a piece's way, "Kc7-b7-a6"), is a move with the readings it may have
 // (sans): the board plays the first one that is legal (moves.js), the voice says that one — and the word as it is
 // written when none is. Long algebraic too ("Bfl-g2", "RaS-bS"), and a pawn's capture named by its two files ("10 e5
 // de": d takes on e), as older books write it.
 const RANK_LIKE = { l: '1', i: '1', I: '1', '|': '1', z: '2', Z: '2', a: '4', d: '4', g: '4', q: '4', A: '4', s: '5', S: '58', b: '56', é: '6', G: '6', T: '7', B: '8', '&': '8' };
-const FILE_LIKE = { '£': 'f', '{': 'f', '¢': 'c' };
+const FILE_LIKE = { '£': 'f', '{': 'f', '¢': 'ce', '€': 'e' };
 const R = '[1-8lizZadgqAsSbéGTB&|]';
-const F = '[a-h£{¢]';
+const F = '[a-h£{¢€]';
 const OCR_MOVE = new RegExp(
   `(?<![\\p{L}\\p{N}.\\-–])(?:(?<num>\\d{1,3})(?<dots>\\s?(?:\\.\\s?){1,4}|\\s)|(?<bdots>\\.{2,3}|…)\\s?)?(?<tok>[KQRBN]?${F}${R}[-–:x×X]${F}${R}|[KQRBN]?${F}?${R}?[x:×X]?${F}${R}|[O0]-[O0](?:-[O0])?[O0]?|(?<pf>[a-h])(?<pt>[a-h]))(?<chk>[+†‡#t]?)(?![\\p{L}\\p{N}]|[-–][a-h])`,
   'gu',
@@ -130,7 +131,7 @@ function readings(tok) {
   const m = new RegExp(`^([KQRBN]?)(${F}?)(${R}?)([-–x:×X]?)(${F})(${R})$`, 'u').exec(tok);
   if (m && !(/[-–]/.test(m[4]) && !(m[2] && m[3]))) {
     const [, piece, ff, fr, x, file, rank] = m;
-    const files = c => (c ? [FILE_LIKE[c] || c] : ['']);
+    const files = c => (c ? [...(FILE_LIKE[c] || c)] : ['']);
     const ranks = c => (!c ? [''] : /\d/.test(c) ? [c] : [...(RANK_LIKE[c] || '')]);
     for (const a of files(ff)) for (const b of ranks(fr)) for (const c of files(file)) for (const d of ranks(rank)) out.push(`${piece}${a}${b}${x && !/[-–]/.test(x) ? 'x' : ''}${c}${d}`);
   }

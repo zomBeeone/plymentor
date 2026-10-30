@@ -7,16 +7,21 @@ import { ocrWorker, ocrText } from './ocr.js';
 import { grayFrom } from './diagrams.js';
 
 let glyphs = null;
+// A scanned page narrower than SMALL pixels at 300 dpi (a small page's scan: its letters a dozen pixels high) is read by
+// the OCR at READ_WIDTH pixels wide.
+const SMALL = 1200;
+const READ_WIDTH = 1600;
 
 /**
- * The app's own pieces (the Merida and cburnett sets) each drawn alone on a light square: the pieces to read a book's
- * boards by until the book's own teach better (see readBoards).
+ * The app's own pieces each drawn alone on a light square — the Merida, cburnett, fantasy and kosal sets (they read the
+ * owner's books best: mpchess and chessnut make some books' pieces worse) —: the pieces to read a book's boards by until
+ * the book's own teach better (see readBoards).
  */
 function pieceGlyphs() {
   glyphs ||= (async () => {
     const S = 64;
     const out = [];
-    for (const set of ['merida', 'cburnett'])
+    for (const set of ['merida', 'cburnett', 'fantasy', 'kosal'])
       for (const t of ['P', 'N', 'B', 'R', 'Q', 'K']) {
         const img = new Image();
         img.src = `/assets/piece/${set}/w${t}.svg`;
@@ -77,23 +82,31 @@ export class Scanner {
    */
   async page(n, lane = 0, { ocr = true, figures = null, whole = true } = {}) {
     const canvas = await renderPage(this.doc, n, { dpi: whole || ocr ? 300 : 200 });
+    let read = canvas;
     try {
       const { width, height } = canvas;
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
       const rgba = ctx.getImageData(0, 0, width, height).data;
       const { boards } = await this.call({ op: 'find', rgba: rgba.buffer, width, height, figures: figures || [], whole }, [rgba.buffer]);
-      // (the boards blanked out: their pieces are read as letters otherwise)
-      ctx.fillStyle = '#fff';
-      for (const b of boards) {
-        const m = b.width * 0.06;
-        ctx.fillRect(b.x - m, b.y - m, b.width + 2 * m, b.height + 2 * m);
-      }
       if (!ocr) return ocrText({ blocks: [] }, { width, height, boards });
+      // (a page of few pixels — a scan of a small page — is read by the OCR at a larger size: small letters are read
+      // badly; its boards as found above)
+      if (width < SMALL) read = await renderPage(this.doc, n, { dpi: (300 * READ_WIDTH) / width });
+      const f = read.width / width;
+      const at = boards.map(b => ({ ...b, x: b.x * f, y: b.y * f, width: b.width * f, height: b.height * f }));
+      // (the boards blanked out: their pieces are read as letters otherwise)
+      const rctx = read.getContext('2d', { willReadFrequently: true });
+      rctx.fillStyle = '#fff';
+      for (const b of at) {
+        const m = b.width * 0.06;
+        rctx.fillRect(b.x - m, b.y - m, b.width + 2 * m, b.height + 2 * m);
+      }
       const worker = await (this.ocr[lane] ||= ocrWorker());
-      const { data } = await worker.recognize(canvas, {}, { blocks: true, text: false });
-      return ocrText(data, { width, height, boards });
+      const { data } = await worker.recognize(read, {}, { blocks: true, text: false });
+      return ocrText(data, { width: read.width, height: read.height, boards: at });
     } finally {
       canvas.width = canvas.height = 0; // (a page at 300 dpi is big)
+      read.width = read.height = 0;
     }
   }
 
@@ -117,9 +130,12 @@ export class Scanner {
     return (await this.call({ op: 'picture', rgba: rgba.buffer, width: canvas.width, height: canvas.height }, [rgba.buffer])).board;
   }
 
-  /** Reads the boards of a book (all of them found so far, as page() gave them): [{ placement, sure, alts }]. */
-  async read(boards) {
-    return (await this.call({ op: 'read', boards, glyphs: await pieceGlyphs() })).readings;
+  /**
+   * Reads the boards of a book (all of them found so far, as page() gave them; `labels`: the position some of them are
+   * known to show, or null, per board — see readBoards): [{ placement, sure, alts }].
+   */
+  async read(boards, labels = []) {
+    return (await this.call({ op: 'read', boards, labels, glyphs: await pieceGlyphs() })).readings;
   }
 
   close() {

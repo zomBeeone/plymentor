@@ -209,7 +209,8 @@ export async function renderPage(doc, n, { dpi = 300, maxSide = 4200 } = {}) {
 }
 
 /**
- * Draws page `n` into `canvas` — at `scale` (CSS pixels per PDF point), or as large as fits in `fit` ({ width, height })
+ * Draws page `n` into `canvas` — at `scale` (CSS pixels per PDF point), or as large as fits in `fit` ({ width, height }:
+ * a height of Infinity for a width)
  * — and its text layer into `layer` (transparent text over the picture, where the reader marks sentences and moves;
  * none when `layer` is null: a scanned page's words come from its OCR). Returns { width, height, spans } — spans[i] is
  * the element of the page's i-th text item —, or null when cancelled() says another page was asked for meanwhile.
@@ -222,7 +223,8 @@ export async function drawPage(doc, n, { canvas, layer, scale, fit, cancelled = 
     scale = Math.max(0.2, Math.min(fit.width / one.width, fit.height / one.height));
   }
   const viewport = page.getViewport({ scale });
-  const ratio = window.devicePixelRatio || 1;
+  // (a page zoomed in far: fewer of the screen's pixels — a canvas of 40 million pixels at most, 16384 a side)
+  const ratio = Math.min(window.devicePixelRatio || 1, Math.sqrt(40e6 / (viewport.width * viewport.height)), 16384 / Math.max(viewport.width, viewport.height));
   canvas.width = Math.floor(viewport.width * ratio);
   canvas.height = Math.floor(viewport.height * ratio);
   canvas.style.width = `${Math.floor(viewport.width)}px`;

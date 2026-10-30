@@ -10,10 +10,12 @@ import { BookMoves } from './moves.js';
 import { openEpub } from './epub.js';
 import { openPdf, closePdf, readPageText, pageBoxes, pdfVersion } from './pdf.js';
 import { Scanner } from './scan.js';
-import { bookFile, loadCache, saveCache } from './library.js';
+import { bookFile, loadCache, saveCache, saveBook } from './library.js';
 import { startReading, prepareReading, cancelReading, readAloud, stopSpeaking } from '../voice.js';
 
-const TEXT_CACHE = 4; // the version of what is kept of a PDF's pages (pdf.js's version goes with it)
+// The version of what is kept of a PDF's pages (pdf.js's version goes with it): 5 since the two columns of a scanned
+// page are read one after the other, and a small scan is read by the OCR at a larger size.
+const TEXT_CACHE = 5;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 
 function makeUnit(index, title, text, more, { readings = !!more?.ocr } = {}) {
@@ -22,11 +24,30 @@ function makeUnit(index, title, text, more, { readings = !!more?.ocr } = {}) {
 }
 
 /**
- * A PDF page (as kept: its text, items and diagrams) as a unit; its diagrams are copies: the reading follows them. Its
- * moves are read as a scan's may be written (text.js: ocrMoves) — the text of many PDFs is a scanner's OCR.
+ * Where a diagram is, for the position the student set for it (kept with the book: meta.fixes): an EPUB's picture,
+ * or a PDF page's box (its middle: a page read again — another version of the reader — keeps it there).
  */
-function pageUnit(u, page) {
-  const diagrams = (page.diagrams || []).map((d, k) => ({ at: d.at, placement: d.placement || null, side: d.side || null, font: !!d.font, sure: d.sure, alts: d.alts, box: d.box, kind: 'diagram', unit: u, index: k }));
+function fixKey(d) {
+  if (d.path) return `e:${d.path}`;
+  return d.box ? `${d.unit}@${((d.box[0] + d.box[2]) / 2).toFixed(2)},${((d.box[1] + d.box[3]) / 2).toFixed(2)}` : `${d.unit}#${d.index}`;
+}
+
+/** A diagram as the student set it: that position, exactly (as a chess font's), whatever the picture was read as. */
+function applyFix(d, fix) {
+  if (fix) Object.assign(d, { placement: fix.placement, side: fix.side || null, font: true, sure: 1, alts: [], fixed: true });
+  return d;
+}
+
+/**
+ * A PDF page (as kept: its text, items and diagrams) as a unit; its diagrams are copies: the reading follows them (the
+ * ones the student set right as set: `fixes`). Its moves are read as a scan's may be written (text.js: ocrMoves) — the
+ * text of many PDFs is a scanner's OCR.
+ */
+function pageUnit(u, page, fixes = {}) {
+  const diagrams = (page.diagrams || []).map((d, k) => {
+    const out = { at: d.at, placement: d.placement || null, side: d.side || null, font: !!d.font, sure: d.sure, alts: d.alts, box: d.box, kind: 'diagram', unit: u, index: k };
+    return applyFix(out, fixes[fixKey(out)]);
+  });
   return makeUnit(u, `Page ${u + 1}`, page.text, { items: page.items, diagrams, ocr: !!(page.scan && page.scanned) }, { readings: true });
 }
 
@@ -109,6 +130,21 @@ class Book {
     return null;
   }
 
+  /**
+   * The student set diagram `k` of unit `u` right — `placement` (a FEN's piece placement), `side` ('w' or 'b'): kept
+   * with the book (meta.fixes), the book followed again from it, and the book's other boards read again with it (it
+   * shows how the book draws its pieces: see teach).
+   */
+  async fix(u, k, placement, side) {
+    const d = this.units[u]?.diagrams[k];
+    if (!d) return;
+    this.meta.fixes = { ...(this.meta.fixes || {}), [fixKey(d)]: { placement, side } };
+    await saveBook(this.meta).catch(() => {});
+    applyFix(d, { placement, side });
+    await this.retrack();
+    this.teach?.();
+  }
+
   close() {
     this.closed = true;
     this.emit();
@@ -119,10 +155,16 @@ class Book {
   }
 }
 
-const PICTURES = 1; // the version of what is kept of an EPUB's pictures
+const PICTURES = 2; // the version of what is kept of an EPUB's pictures (2: hatching lighter than ink read as such)
 // The version of how a book's boards are read (diagrams.js readBoards): when it changes, the boards kept from before —
-// a scanned PDF's, an EPUB's pictures' — are read again (not looked for again).
-const READING = 2;
+// a scanned PDF's, an EPUB's pictures' — are read again (not looked for again). 3: four of the app's piece sets to start
+// from, the book's known positions teaching its pieces.
+const READING = 3;
+
+/** The positions known of a book's boards, as readBoards takes them: what the student set, or what the reading found. */
+const labelOf = d => (d?.fixed ? d.placement : d?.known || null);
+/** What a list of labels is, to tell whether the boards were read with it already. */
+const labelsKey = labels => labels.map((l, i) => l && `${i}:${l}`).filter(Boolean).join('|');
 
 /** A FEN in a picture's description (its alt text): { placement, side ('w', 'b' or null) } or null. */
 function fenIn(alt) {
@@ -145,6 +187,7 @@ class EpubDiagrams {
     this.readings = {}; // path → the last reading of its board ({ placement, sure, alts })
     this.boards = new Map(); // path → { board, diagrams (its diagrams in the chapters: a picture may come twice), reading }
     this.unread = 0; // boards found since the boards were last read (none read before)
+    this.taught = null; // the positions known of the boards when they were read last (see teach)
     this.dirty = false;
     book.flush = () => this.save();
   }
@@ -153,13 +196,39 @@ class EpubDiagrams {
     const cache = await loadCache(this.book.meta.id).catch(() => null);
     if (cache?.version !== `epub/${PICTURES}`) return;
     this.kept = cache.pictures || {};
-    if (cache.reading === READING) this.readings = cache.readings || {};
+    if (cache.reading === READING) (this.readings = cache.readings || {}), (this.taught = cache.taught || null);
   }
 
   save() {
     if (!this.dirty) return;
     this.dirty = false;
-    return saveCache(this.book.meta.id, { version: `epub/${PICTURES}`, reading: READING, pictures: this.kept, readings: this.readings }).catch(() => {});
+    return saveCache(this.book.meta.id, { version: `epub/${PICTURES}`, reading: READING, pictures: this.kept, readings: this.readings, taught: this.taught }).catch(() => {});
+  }
+
+  /**
+   * The book's boards read again with the positions known of them — the ones the reading found in their game, the
+   * ones the student set right (labelOf) — when these are more than the boards were read with last; true when a
+   * diagram shows another position since (the book is to be followed again).
+   */
+  async teach() {
+    const all = [...this.boards];
+    const labels = all.map(([, x]) => labelOf(x.diagrams.find(d => labelOf(d))));
+    const key = labelsKey(labels);
+    if (!key || key === this.taught || this.book.closed) return false;
+    const readings = await this.scanner.read(all.map(([, x]) => x.board), labels);
+    this.taught = key;
+    let changed = false;
+    readings.forEach((r, i) => {
+      const [path, x] = all[i];
+      for (const d of x.diagrams) {
+        if (d.fixed) continue;
+        if (d.placement !== r.placement) changed = true;
+        Object.assign(d, r);
+      }
+      x.reading = this.readings[path] = r;
+    });
+    this.dirty = true;
+    return changed;
   }
 
   /** The diagrams of chapter `u` among its blocks (a picture that is one gets .diagram: the diagram's index). */
@@ -177,20 +246,24 @@ class EpubDiagrams {
         }
         if (!board) continue;
       }
-      const d = { at: b.at, placement: fen?.placement || null, side: fen?.side || null, font: !!fen, sure: fen ? 1 : 0, alts: [], kind: 'diagram', unit: u, index: out.length };
+      const d = { at: b.at, placement: fen?.placement || null, side: fen?.side || null, font: !!fen, sure: fen ? 1 : 0, alts: [], kind: 'diagram', unit: u, index: out.length, path: b.path };
       b.diagram = out.length;
       out.push(d);
-      if (!board) continue;
-      const known = this.boards.get(b.path);
-      if (known) known.diagrams.push(d);
-      else {
-        // (read before, with the book's other boards: that reading until new boards come)
-        const reading = this.readings[b.path] || null;
-        this.boards.set(b.path, { board, diagrams: [d], reading });
-        if (!reading) this.unread++;
+      const fix = this.book.meta.fixes?.[fixKey(d)];
+      if (board) {
+        const known = this.boards.get(b.path);
+        if (known) known.diagrams.push(d);
+        else {
+          // (read before, with the book's other boards: that reading until new boards come)
+          const reading = this.readings[b.path] || null;
+          this.boards.set(b.path, { board, diagrams: [d], reading });
+          if (!reading) this.unread++;
+        }
+        const reading = this.boards.get(b.path).reading;
+        if (reading) Object.assign(d, reading);
       }
-      const reading = this.boards.get(b.path).reading;
-      if (reading) Object.assign(d, reading);
+      // (as the student set it)
+      applyFix(d, fix);
     }
     return out;
   }
@@ -220,6 +293,7 @@ class EpubDiagrams {
     readings.forEach((r, i) => {
       const [path, x] = all[i];
       for (const d of x.diagrams) {
+        if (d.fixed) continue;
         if (d.unit !== u && d.placement !== r.placement) changed = true;
         Object.assign(d, r);
       }
@@ -271,7 +345,18 @@ export async function openBook(meta) {
         book.add(makeUnit(i, epub.chapters[i].title, text, { blocks, diagrams }));
         if (changed) await book.retrack();
       }
+      // the book's boards read again with what is known of them (twice at most: what is known then may know more)
+      for (let round = 0; round < 2 && !book.closed && (await pictures.teach()); round++) await book.retrack();
       await pictures.done();
+      // (and again each time the student sets a diagram right)
+      book.teach = () =>
+        (book.teaching = (book.teaching || Promise.resolve())
+          .then(async () => {
+            if (await pictures.teach()) await book.retrack();
+            pictures.scanner.close();
+            if (!book.closed) await pictures.save();
+          })
+          .catch(e => console.warn("the book's boards could not be read again:", e)));
     })().catch(e => ((book.error = e), book.emit()));
     return book;
   }
@@ -289,12 +374,14 @@ export async function openBook(meta) {
     // how the kept boards were read (when it is not today's way, they are read again — and again the next time the
     // book is opened, if that fails)
     let reading = kept ? cache.reading : READING;
+    // (the positions known of the boards when they were read last: see teachPdf)
+    const state = { taught: kept && cache.reading === READING ? cache.taught || null : null };
     const save = (now = false) => {
       dirty = true;
       if (!now && Date.now() - savedAt < 20000) return;
       dirty = false;
       savedAt = Date.now();
-      return saveCache(meta.id, { version, reading, pages }).catch(() => {});
+      return saveCache(meta.id, { version, reading, pages, taught: state.taught }).catch(() => {});
     };
     // (the boards kept from before, read as boards were read then: read again, all together)
     if (reading !== READING) {
@@ -320,13 +407,62 @@ export async function openBook(meta) {
         dirty = true;
       }
       if ((page.scan || page.picture || page.figures) && !page.scanned) scans.push(n - 1);
-      else book.add(pageUnit(n - 1, page));
+      else book.add(pageUnit(n - 1, page, meta.fixes));
       if (n % 25 === 0) await pause(); // (pages kept from before come all at once: the window goes on meanwhile)
     }
     if (dirty && !book.closed) await save(true);
     if (scans.length && !book.closed) await scanPages(book, pages, scans, save);
+    // the book's boards read again with what is known of them — and again each time the student sets a diagram right
+    if (!book.closed && (await teachPdf(book, pages, state))) await save(true);
+    book.teach = () =>
+      (book.teaching = (book.teaching || Promise.resolve())
+        .then(() => teachPdf(book, pages, state))
+        .then(read => read && !book.closed && save(true))
+        .catch(e => console.warn("the book's boards could not be read again:", e)));
   })().catch(e => ((book.error = e), book.emit()));
   return book;
+}
+
+/**
+ * A PDF's picture boards read again with the positions known of them (labelOf: the ones the reading found in their
+ * game, the ones the student set right) when these are more than the boards were read with last (`state.taught`); the
+ * book is followed again when a diagram shows another position since — twice at most (what is known then may know
+ * more). Returns whether the boards were read again.
+ */
+async function teachPdf(book, pages, state) {
+  const list = [];
+  pages.forEach((p, u) => p?.diagrams?.forEach((d, k) => d.board && list.push({ u, k })));
+  let read = false;
+  for (let round = 0; round < 2 && list.length && !book.closed; round++) {
+    const labels = list.map(({ u, k }) => labelOf(book.units[u]?.diagrams[k]));
+    const key = labelsKey(labels);
+    if (!key || key === state.taught) break;
+    const scanner = new Scanner(book.doc);
+    let readings;
+    try {
+      readings = await scanner.read(
+        list.map(({ u, k }) => pages[u].diagrams[k].board),
+        labels,
+      );
+    } finally {
+      scanner.close();
+    }
+    if (book.closed) break;
+    state.taught = key;
+    read = true;
+    let changed = false;
+    readings.forEach((r, i) => {
+      const { u, k } = list[i];
+      Object.assign(pages[u].diagrams[k], r);
+      const d = book.units[u]?.diagrams[k];
+      if (!d || d.fixed) return;
+      if (d.placement !== r.placement) changed = true;
+      Object.assign(d, r);
+    });
+    if (!changed) break;
+    await book.retrack();
+  }
+  return read;
 }
 
 /**
@@ -379,23 +515,26 @@ async function scanPages(book, pages, todo, save) {
         page.scanned = true;
         page.diagrams?.forEach((d, k) => d.board && !boards.some(b => b.u === u && b.k === k) && (boards.push({ u, k, board: d.board }), (found = true)));
       }
-      // the book's boards, read again with the new ones
+      // the book's boards, read again with the new ones (and with what is known of them so far)
       let changed = false;
       if (found) {
-        const readings = await scanner.read(boards.map(b => b.board));
+        const readings = await scanner.read(
+          boards.map(b => b.board),
+          boards.map(({ u, k }) => labelOf(book.units[u]?.diagrams[k])),
+        );
         readings.forEach((r, i) => {
           const { u, k } = boards[i];
           const d = pages[u].diagrams[k];
           const moved = d.placement !== r.placement;
           Object.assign(d, r);
           const ud = book.units[u]?.diagrams[k];
-          if (ud && !batch.includes(u)) {
+          if (ud && !ud.fixed && !batch.includes(u)) {
             Object.assign(ud, r);
             if (moved) changed = true; // (another position: the moves after it are followed again)
           }
         });
       }
-      for (const [i, u] of batch.entries()) book.add(pageUnit(u, results[i] ? pages[u] : { ...pages[u], scanned: false }));
+      for (const [i, u] of batch.entries()) book.add(pageUnit(u, results[i] ? pages[u] : { ...pages[u], scanned: false }, book.meta.fixes));
       if (changed) await book.retrack();
       book.scanning.done += batch.length;
       save();

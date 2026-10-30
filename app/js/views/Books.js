@@ -10,6 +10,7 @@ import { navigate } from '../router.js';
 import { cls, stored, store } from '../util.js';
 import { useForce } from '../ctrl.js';
 import { Board } from '../components/Board.js';
+import { BoardEditor } from '../components/BoardEditor.js';
 import { MoveList } from '../components/MoveList.js';
 import { EvalBar } from '../components/EvalBar.js';
 import { EnginePanel } from '../components/EnginePanel.js';
@@ -21,7 +22,7 @@ import { Tree, placeCoachPosition } from '../tree.js';
 import { INITIAL_FEN } from '../chess.js';
 import { listBooks, addBook, removeBook, getBook, saveBook, coverUrl } from '../books/library.js';
 import { openBook, Reading } from '../books/reader.js';
-import { PdfPage, EpubPage } from '../books/page.js';
+import { PdfPage, EpubPage, ZOOM } from '../books/page.js';
 
 const SPEEDS = [1, 1.25, 1.5, 2];
 
@@ -135,7 +136,12 @@ function Reader({ id }) {
   // a position of the move list the student clicked, or the coach showed: { tree, node } — or the student's own moves
   // (own: true), on a tree of their own
   const [browse, setBrowse] = useState(null);
-  const [zoom, setZoom] = useState(() => stored('books.zoom', 'page')); // a PDF page: whole ('page') or as wide as the panel
+  // a PDF page: whole ('page'), as wide as the panel ('width'), or a share of the panel's width (a number, in %)
+  const [zoom, setZoom] = useState(() => stored('books.zoom', 'page'));
+  // a diagram the student sets right on the board editor: { diagram, placement, side }
+  const [editing, setEditing] = useState(null);
+  const editingRef = useRef(null);
+  editingRef.current = editing;
   const reading = useRef(null);
   const meta = useRef(null);
   const shown = useRef(null); // the move of the text the board shows (with .tree and .node)
@@ -227,12 +233,36 @@ function Reader({ id }) {
     else shown.current = r.book.nodeAt(unit, m.start);
     setBrowse(null);
   };
+  /**
+   * The board editor for diagram `d`: the position the board shows for it (or as its picture was read, or an empty
+   * board) to set right; the reading pauses meanwhile.
+   */
+  const edit = d => {
+    const r = reading.current;
+    if (!d || !r) return;
+    if (r.playing) r.pause();
+    const fen = d.node?.fen.split(' ');
+    setEditing({ diagram: d, placement: fen?.[0] || d.placement || '8/8/8/8/8/8/8/8', side: fen?.[1] || d.side || 'w' });
+  };
+  /** The position the student set for a diagram: kept with the book, which is followed again from it. */
+  const saveFix = async (placement, side) => {
+    const r = reading.current;
+    const d = editing?.diagram;
+    setEditing(null);
+    if (!r || !d) return;
+    await r.book.fix(d.unit, d.index, placement, side);
+    shown.current = d.node ? d : shown.current;
+    setBrowse(null);
+    rerender();
+    toast(d.node ? 'The diagram is set right; the book’s moves are followed again from it.' : 'The position was kept, but no moves follow from it.', d.node ? 'success' : 'info');
+  };
   /** A diagram clicked on the page: the board shows its position, and the reading goes on after it. */
   const onDiagram = (unit, i) => {
     const r = reading.current;
     const d = r?.book.units[unit]?.diagrams[i];
     if (!d) return;
-    if (!d.node) return toast('This diagram could not be read: its position is not known.', 'error');
+    // (one that could not be read: the student may set it up on the board editor)
+    if (!d.node) return edit(d);
     const u = r.book.units[unit];
     for (const [sentence, s] of u.sentences.entries()) {
       const part = s.parts?.findIndex(p => p.diagram === i) ?? -1;
@@ -257,6 +287,20 @@ function Reader({ id }) {
     const u = (p.unit >= 0 ? p.unit : r.at.unit) + dir;
     if (u < 0 || u >= r.book.count) return;
     goTo({ unit: u, sentence: dir < 0 && r.book.format === 'epub' ? Math.max(0, (r.book.units[u]?.sentences.length || 1) - 1) : 0 }, true);
+  };
+  /** A PDF page's zoom: 'page', 'width', or a share of the panel's width in % (kept for the next time). */
+  const zoomTo = z => {
+    if (typeof z === 'number') z = Math.max(ZOOM.min, Math.min(ZOOM.max, Math.round(z)));
+    setZoom(z);
+    store('books.zoom', z);
+    page.current?.setZoom?.(z);
+  };
+  /** Zooms in (dir 1) or out (-1) by a tenth of the panel's width, from the size the page has now. */
+  const zoomBy = dir => {
+    const p = page.current;
+    if (!p || p.percent === undefined) return;
+    const now = typeof p.zoom === 'number' ? p.zoom : p.percent || 100;
+    zoomTo(dir > 0 ? Math.floor(now / 10) * 10 + 10 : Math.ceil(now / 10) * 10 - 10);
   };
   const toggle = () => {
     const r = reading.current;
@@ -298,7 +342,16 @@ function Reader({ id }) {
     const P = book.format === 'pdf' ? PdfPage : EpubPage;
     const p = new P(pageEl.current, book, { onSentence, onMove, onDiagram, onTurn: turn, onPaged: rerender }, { zoom });
     page.current = p;
+    // (Ctrl and the mouse wheel zoom a PDF page)
+    const el = pageEl.current;
+    const onWheel = e => {
+      if (!e.ctrlKey || book.format !== 'pdf') return;
+      e.preventDefault();
+      zoomBy(e.deltaY < 0 ? 1 : -1);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
     return () => {
+      el.removeEventListener('wheel', onWheel);
       p.destroy();
       page.current = null;
     };
@@ -343,7 +396,7 @@ function Reader({ id }) {
     const onKey = e => {
       const t = e.target;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.ctrlKey || e.metaKey || e.altKey || editingRef.current) return;
       const r = reading.current;
       if (!r) return;
       if (e.key === ' ') toggle();
@@ -352,6 +405,7 @@ function Reader({ id }) {
       else if (e.key === 'PageDown') turn(1);
       else if (e.key === 'PageUp') turn(-1);
       else if (e.key === 'f') setOrientation(o => (o === 'white' ? 'black' : 'white'));
+      else if ((e.key === '+' || e.key === '=' || e.key === '-') && r.book.format === 'pdf') zoomBy(e.key === '-' ? -1 : 1);
       else return;
       e.preventDefault();
     };
@@ -383,10 +437,13 @@ function Reader({ id }) {
   viewRef.current = view;
   const node = view?.node;
   const own = !!browse?.own; // (the student's own moves on the board)
+  // (the diagram whose position the board shows: one the student may set right)
+  const diagramShown = !browse && move?.kind === 'diagram' && move.node === node ? move : null;
   const best = engineOn && live?.lines?.[0]?.pv?.[0];
   const shapes = best && s.settings?.board?.bestArrow !== false ? [{ orig: best.slice(0, 2), dest: best.slice(2, 4), brush: 'paleBlue' }] : [];
   const scanning = book?.scanning;
   const loading = book && book.loaded < book.count && !scanning;
+  const zoomPct = typeof zoom === 'number' ? zoom : p?.percent || 100;
   const whereLabel = !book
     ? ''
     : book.format === 'pdf'
@@ -416,12 +473,23 @@ function Reader({ id }) {
           ${book.titles.map((t, i) => html`<option value=${i}>${t}</option>`)}
         </select>`}
         ${book?.format === 'pdf' &&
-        html`<button class="btn small" title=${zoom === 'page' ? 'Make the page as wide as the panel (it scrolls with the reading)' : 'Show the whole page'} onClick=${() => {
-          const z = zoom === 'page' ? 'width' : 'page';
-          setZoom(z);
-          store('books.zoom', z);
-          page.current?.setZoom?.(z);
-        }}>${zoom === 'page' ? 'Fit width' : 'Whole page'}</button>`}
+        html`<div class="book-zoom">
+          <div class="btn-group">
+            <button class=${cls('btn small', zoom === 'page' && 'active')} title="Show the whole page" onClick=${() => zoomTo('page')}>Whole page</button>
+            <button class=${cls('btn small', zoom === 'width' && 'active')} title="Make the page as wide as the panel (it scrolls with the reading)" onClick=${() => zoomTo('width')}>Fit width</button>
+          </div>
+          <input
+            type="range"
+            min=${ZOOM.min}
+            max=${ZOOM.max}
+            step="5"
+            value=${zoomPct}
+            title="The page's size, in % of the panel's width (also Ctrl + the mouse wheel, or + and −)"
+            aria-label="Zoom"
+            onInput=${e => zoomTo(Number(e.currentTarget.value))}
+          />
+          <span class="muted book-zoom-pct">${zoomPct}%</span>
+        </div>`}
         <button class="btn icon" title="Previous page (Page Up)" disabled=${!book} onClick=${() => turn(-1)}>◀</button>
         <span class="muted nowrap book-where">${whereLabel}</span>
         <button class="btn icon" title="Next page (Page Down)" disabled=${!book} onClick=${() => turn(1)}>▶</button>
@@ -429,10 +497,20 @@ function Reader({ id }) {
       <div class="book-page" ref=${pageEl}>${!book ? html`<div class="empty"><span class="spinner"></span></div>` : null}</div>
     </div>
     <div class="book-side">
-      <div class="board-area">
-        ${s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${engineOn ? live?.lines?.[0]?.score || null : null} orientation=${orientation} />`}
-        <${Board} fen=${node?.fen || INITIAL_FEN} lastMove=${node?.uci ? [node.uci.slice(0, 2), node.uci.slice(2, 4)] : null} orientation=${orientation} movable="both" onMove=${play} shapes=${shapes} />
-      </div>
+      ${editing
+        ? html`<${BoardEditor}
+            key=${`${editing.diagram.unit}/${editing.diagram.index}`}
+            placement=${editing.placement}
+            side=${editing.side}
+            orientation=${orientation}
+            title=${editing.diagram.node ? 'Set this diagram right: put the pieces where the book has them' : 'This diagram could not be read: set its position up'}
+            onSave=${saveFix}
+            onCancel=${() => setEditing(null)}
+          />`
+        : html`<div class="board-area">
+            ${s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${engineOn ? live?.lines?.[0]?.score || null : null} orientation=${orientation} />`}
+            <${Board} fen=${node?.fen || INITIAL_FEN} lastMove=${node?.uci ? [node.uci.slice(0, 2), node.uci.slice(2, 4)] : null} orientation=${orientation} movable="both" onMove=${play} shapes=${shapes} />
+          </div>`}
       <div class="book-controls">
         <button class="btn icon" title="Previous sentence (←)" disabled=${!r} onClick=${() => r.step(-1)}>⏮</button>
         <button class=${cls('btn', 'primary', 'book-play')} title=${own && !r?.playing ? 'Go on reading (Space): your moves stay on the board until the book’s next move' : 'Read / pause (Space)'} disabled=${!r} onClick=${toggle}>${
@@ -443,6 +521,9 @@ function Reader({ id }) {
           ${SPEEDS.map(s => html`<button class=${cls('btn small', r?.speed === s && 'active')} disabled=${!r} onClick=${() => r.setSpeed(s)}>${s}×</button>`)}
         </div>
         <span class="spacer"></span>
+        ${diagramShown &&
+        !editing &&
+        html`<button class="btn small" title="The diagram read wrong? Set its pieces right on the board: the book is followed again from it, and its other diagrams are read better" onClick=${() => edit(diagramShown)}>✎ Fix diagram</button>`}
         <button class="btn icon" title="Flip the board (f)" onClick=${() => setOrientation(o => (o === 'white' ? 'black' : 'white'))}>⇅</button>
       </div>
       <div class="book-status muted">

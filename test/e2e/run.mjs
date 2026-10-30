@@ -493,6 +493,11 @@ async function main() {
     await page.waitFor(`${active} === 'f5'`, { what: 'the position before it on the board' });
     await page.click('.book-head button', 'Fit width');
     await page.waitFor(`document.querySelector('.book-page.bk-wide') && document.querySelector('.bk-sheet').offsetWidth > document.querySelector('.book-page').clientWidth * 0.9`, { what: 'the page as wide as the panel' });
+    // a size of the student's (the slider: 150% of the panel's width, the page scrolling both ways), then the whole page
+    await page.eval(`(s => (s.value = '150', s.dispatchEvent(new Event('input', { bubbles: true })), true))(document.querySelector('.book-zoom input[type=range]'))`);
+    await page.waitFor(`document.querySelector('.book-page.bk-zoom') && document.querySelector('.book-zoom-pct')?.textContent === '150%' && document.querySelector('.bk-sheet').offsetWidth > document.querySelector('.book-page').clientWidth * 1.3`, { what: 'the page at 150% of the panel’s width' });
+    await page.click('.book-head button', 'Whole page');
+    await page.waitFor(`!document.querySelector('.book-page.bk-zoom') && !document.querySelector('.book-page.bk-wide') && document.querySelector('.bk-sheet').offsetHeight <= document.querySelector('.book-page').clientHeight`, { what: 'the whole page again' });
   });
 
   await step('book reader: a scanned PDF — its words read by OCR, its hatched diagrams found and read, the board showing them', async () => {
@@ -512,6 +517,21 @@ async function main() {
     await page.waitFor(`document.querySelectorAll('.bk-diagram').length === 2 && !document.querySelector('.bk-diagram.unread')`, { timeout: 30000, what: 'the two diagrams, read' });
     await page.eval(`(document.querySelectorAll('.bk-diagram')[1].click(), true)`);
     await page.waitFor(`${active} === 'a6' && document.querySelector('.bk-diagram.bk-shown') === document.querySelectorAll('.bk-diagram')[1]`, { what: 'the diagram’s position on the board, marked on the page' });
+    // the diagram set right on the board editor (a piece taken away): the board shows it, and it is kept with the book
+    const onBoard = sq => `[...document.querySelectorAll('.book-side .board-area cg-board piece')].some(p => p.cgKey === '${sq}')`;
+    await page.click('.book-controls button', 'Fix diagram');
+    await page.waitFor(`document.querySelectorAll('.board-editor cg-board piece').length >= 30`, { what: 'the board editor with the diagram’s pieces' });
+    await page.click('.board-editor button', 'Remove');
+    await page.clickSquare('.board-editor .cg-wrap', 'h2');
+    await page.waitFor(`![...document.querySelectorAll('.board-editor cg-board piece')].some(p => p.cgKey === 'h2')`, { what: 'the h2 pawn taken away' });
+    await page.click('.board-editor button', 'Save the position');
+    await page.waitFor(`!document.querySelector('.board-editor') && ${onBoard('g2')} && !${onBoard('h2')}`, { timeout: 15000, what: 'the position as set, on the board' });
+    await go(page, '#/books');
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 3`, { what: 'the books' });
+    await page.click('.book-card', 'Scanned');
+    await page.waitFor(`document.querySelectorAll('.bk-diagram').length === 2 && !document.querySelector('.bk-diagram.unread')`, { timeout: 60000, what: 'the scanned book again' });
+    await page.eval(`(document.querySelectorAll('.bk-diagram')[1].click(), true)`);
+    await page.waitFor(`${onBoard('g2')} && !${onBoard('h2')}`, { what: 'the position set right, kept with the book' });
     // read aloud from the start: the board shows the first diagram, then plays the moves (3.Bbs said as bishop to b5)
     await page.eval(`(window.ccSaid = [], true)`);
     await page.eval(`([...document.querySelectorAll('.bk-pdf .textLayer [data-s]')].find(e => e.textContent.includes('Scanned')).click(), true)`);

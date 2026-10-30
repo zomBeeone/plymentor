@@ -322,6 +322,27 @@ function morph(map, w, h, n, dilate) {
 }
 
 /**
+ * Whether a dark square's hatching is ink (`ink`: its 0/1 ink at the reading's cut, n × n pixels): its sides — where a
+ * piece seldom reaches — have pixels on thin diagonal strokes (ink continuing diagonally, not on a straight run across
+ * or down). A small scan's hatching may be lighter grey: no ink at all there.
+ */
+function hatchedInk(ink, n) {
+  const at = (x, y) => (x >= 0 && y >= 0 && x < n && y < n ? ink[y * n + x] : 0);
+  let strokes = 0;
+  let all = 0;
+  const band = Math.max(2, Math.round(n * 0.18));
+  for (let y = 0; y < n; y++)
+    for (let x = 0; x < n; x++) {
+      if (Math.min(x, y, n - 1 - x, n - 1 - y) >= band) continue;
+      all++;
+      if (!ink[y * n + x]) continue;
+      const diag = (at(x + 1, y - 1) && at(x + 2, y - 2)) || (at(x + 1, y + 1) && at(x + 2, y + 2)) || (at(x - 1, y + 1) && at(x - 2, y + 2)) || (at(x - 1, y - 1) && at(x - 2, y - 2));
+      if (diag) strokes++;
+    }
+  return strokes >= all * 0.06;
+}
+
+/**
  * What is on one square: { silhouette (Float32Array CELL×CELL: the piece's shape, filled), area (its share of the
  * square), fill (the share of ink inside it: high for a black piece, low for a white one), ink (ink in the square) }.
  * The square's background — white, or hatched for a dark square — is everything reachable from the square's sides
@@ -345,9 +366,12 @@ export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false } =
         inkCount++;
       }
     }
-  // the background: reachable from the sides through light pixels (on a light square the ink is grown by a pixel
-  // first, closing gaps in a piece's outline; on a dark square that would close the hatching's gaps too)
-  const walls = darkSquare ? dark : morph(dark, n, n, 1, true);
+  // (a hatched square whose hatching is lighter than the ink — a small scan's grey strokes — is read as a light one:
+  // only its pieces are ink)
+  const crisp = darkSquare && hatchedInk(dark, n);
+  // the background: reachable from the sides through light pixels (the ink grown by a pixel first, closing gaps in a
+  // piece's outline — not on a square hatched in ink: that would close the hatching's gaps too)
+  const walls = crisp ? dark : morph(dark, n, n, 1, true);
   const reach = new Uint8Array(n * n);
   const stack = [];
   for (let i = 0; i < n; i++) for (const p of [i, (n - 1) * n + i, i * n, i * n + n - 1]) if (!walls[p] && !reach[p]) (reach[p] = 1), stack.push(p);
@@ -368,12 +392,12 @@ export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false } =
   const rest = new Uint8Array(n * n);
   for (let i = 0; i < rest.length; i++) rest[i] = reach[i] ? 0 : 1;
   const t = Math.max(1, Math.round(size / 40));
-  let shape = morph(morph(rest, n, n, t, false), n, n, darkSquare ? t + 1 : t, true);
+  let shape = morph(morph(rest, n, n, t, false), n, n, crisp ? t + 1 : t, true);
   let found = 0;
   for (let y = Math.round(n * 0.1); y < n * 0.9; y++) for (let x = Math.round(n * 0.1); x < n * 0.9; x++) found += shape[y * n + x];
   // (on a dark square: horizontal and vertical strokes in its middle — a piece's outline has them, hatching never)
   let straight = 0;
-  if (darkSquare && found < n * n * 0.15)
+  if (crisp && found < n * n * 0.15)
     for (let y = Math.round(n * 0.15); y < n * 0.85; y++)
       for (let x = Math.round(n * 0.15); x < n * 0.85; x++) {
         const i = y * n + x;
@@ -760,6 +784,9 @@ function halves(tones) {
 // ---------------------------------------------------------------------------------------------
 // The positions of a book's boards
 
+/** The 64 squares of a FEN's piece placement, from a8 to h1: a piece's letter or '.'. */
+const squaresOf = placement => placement.split('/').map(r => r.replace(/\d/g, d => '.'.repeat(Number(d)))).join('');
+
 const START = ['rnbqkbnr', 'pppppppp', '........', '........', '........', '........', 'PPPPPPPP', 'RNBQKBNR'];
 const TYPES = ['p', 'n', 'b', 'r', 'q', 'k'];
 const PIECE_MIN = 0.05; // a silhouette smaller than this share of its square is no piece (a mark, a speck)
@@ -788,15 +815,39 @@ function split(values) {
  * example of each piece; every piece is then read by the examples it is most like, the surest readings join the
  * examples, and the rules of a position (one king a side; no pawn on the first or last rank) settle what stays close.
  * boards: [{ cells: [[{ shape (cellShape), darkSquare }] per column] per row, rows, cols }]; examples: more examples
- * ({ type, silhouette }) to start with (from a font's pieces). Each board gets .pieces ([row][col]: 'P'…'k' or '.')
- * and .sure (0…1). Returns { examples, whiteFill (the fill between white and black pieces) }.
+ * ({ type, silhouette }) to start with (from a font's pieces); labels: the positions some of the boards are known to show
+ * (a FEN's piece placement, or null, per board: a diagram the reading found in its game, one the student set right) —
+ * their squares are the book's own examples, and they read as they are known. Each board gets .pieces ([row][col]:
+ * 'P'…'k' or '.') and .sure (0…1). Returns { examples, whiteFill (the fill between white and black pieces) }.
  */
-export function readBoards(boards, { examples = [] } = {}) {
+export function readBoards(boards, { examples = [], labels = [] } = {}) {
   const all = boards.flatMap(b => b.cells.flat().filter(c => c.shape.area >= PIECE_MIN));
   // white and black: the share of ink in the silhouette's core, in two groups for this book (and per piece below: a
   // book's white king may be drawn with much ink inside)
   const whiteFill = split(all.map(c => c.shape.fill)) ?? 0.7;
   const known = [];
+  const labelled = boards.map((b, i) => (labels[i] && b.rows === 8 && b.cols === 8 ? squaresOf(labels[i]) : null));
+  const taught = new Map(); // piece, colour, colour of the square → the labelled squares
+  boards.forEach((b, i) => {
+    const sq = labelled[i];
+    if (!sq) return;
+    for (let r = 0; r < 8; r++)
+      for (let c = 0; c < 8; c++) {
+        const cell = b.cells[r][c];
+        const p = sq[r * 8 + c];
+        if (p === '.' || cell.shape.area < PIECE_MIN) continue;
+        const e = { type: p.toLowerCase(), white: p !== p.toLowerCase(), dark: cell.darkSquare, fill: cell.shape.fill, area: cell.shape.area, height: cell.shape.height, silhouette: cell.shape.silhouette, seed: true };
+        const key = `${p}${e.dark}`;
+        taught.set(key, [...(taught.get(key) || []), e]);
+      }
+  });
+  // (a known position may be a move off — the piece that took on a square labelling the one it took —: a labelled
+  // square much less like the others of its piece than they are like each other teaches nothing)
+  for (const list of taught.values()) {
+    const like = list.map(e => (list.length < 3 ? 1 : list.reduce((s, o) => s + (o === e ? 0 : dot((e.unit ||= unit(e.silhouette)), (o.unit ||= unit(o.silhouette)))), 0) / (list.length - 1)));
+    const typical = [...like].sort((a, b) => a - b)[like.length >> 1];
+    list.forEach((e, k) => like[k] >= typical - 0.15 && known.push(e));
+  }
   // a first example of each piece from the boards that look like the start of a game
   for (const b of boards) {
     if (b.rows !== 8 || b.cols !== 8) continue;
@@ -810,17 +861,19 @@ export function readBoards(boards, { examples = [] } = {}) {
     for (const r of [0, 1, 6, 7])
       for (let c = 0; c < 8; c++) {
         const cell = b.cells[r][c];
-        if (cell.shape.area >= PIECE_MIN) known.push({ type: START[r][c].toLowerCase(), white: r >= 6, fill: cell.shape.fill, area: cell.shape.area, height: cell.shape.height, silhouette: cell.shape.silhouette, seed: true });
+        if (cell.shape.area >= PIECE_MIN) known.push({ type: START[r][c].toLowerCase(), white: r >= 6, dark: cell.darkSquare, fill: cell.shape.fill, area: cell.shape.area, height: cell.shape.height, silhouette: cell.shape.silhouette, seed: true });
       }
   }
-  // (none yet: the given examples to start from — a common chess font's pieces — until the book's own come)
+  // (none yet: the given examples to start from — a common chess font's pieces — until the book's own come; the
+  // pieces the book's own do not show yet, too)
   const seeded = known.length > 0;
-  if (!seeded) known.push(...examples);
+  known.push(...(labelled.some(Boolean) ? examples : examples.filter(e => !known.some(k => k.type === e.type))));
   if (!known.length) return { examples: known, whiteFill };
-  // enough examples of each piece and colour (a book of openings has hundreds from its starting positions)
+  // enough examples of each piece and colour, on each colour of square (a book of openings has hundreds from its
+  // starting positions)
   const kept = new Map();
   for (const e of known) {
-    const key = `${e.type}${e.white}`;
+    const key = `${e.type}${e.white}${e.dark}`;
     const list = kept.get(key) || [];
     if (list.length < 10) list.push(e);
     kept.set(key, list);
@@ -912,7 +965,18 @@ export function readBoards(boards, { examples = [] } = {}) {
     }
     fills[t] = best.cut;
   }
-  for (const b of boards) placePieces(b, fills);
+  // (a shape as large and tall as the book's pieces is one, however unlike the examples it is: a book's king in a
+  // font unlike the app's)
+  const big = median(all.filter(c => c.scores).map(c => c.shape.area)) * 0.9;
+  for (const b of boards) placePieces(b, fills, big);
+  // (a board whose position is known reads as it)
+  boards.forEach((b, i) => {
+    const sq = labelled[i];
+    if (!sq) return;
+    b.pieces = [0, 1, 2, 3, 4, 5, 6, 7].map(r => [...sq.slice(r * 8, r * 8 + 8)]);
+    b.sure = 1;
+    b.alts = [];
+  });
   return { examples: known, whiteFill, fills };
 }
 
@@ -956,7 +1020,7 @@ function twoFills(values) {
 const LIKE_MIN = 0.55; // less like any piece than this: a mark on the square (a dot, an asterisk), not a piece
 
 /** A board's pieces from its cells' scores, with the rules of a position (a whole board: one king a side). */
-function placePieces(b, fills) {
+function placePieces(b, fills, big = Infinity) {
   const pieces = b.cells.map(row => row.map(() => '.'));
   const whole = b.rows === 8 && b.cols === 8;
   const choice = [];
@@ -965,7 +1029,7 @@ function placePieces(b, fills) {
       if (cell.shape.area < PIECE_MIN || !cell.scores) return;
       const edge = whole && (r === 0 || r === 7); // (rank 8 or 1, the board seen from White)
       const ranked = TYPES.filter(t => !(t === 'p' && edge)).sort((x, y) => cell.scores[y] - cell.scores[x]);
-      if (cell.scores[ranked[0]] < LIKE_MIN) return;
+      if (cell.scores[ranked[0]] < LIKE_MIN && !(cell.shape.area >= big && cell.shape.height >= 0.8)) return;
       choice.push({ r, c, ranked, cell });
     }),
   );

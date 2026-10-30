@@ -17,7 +17,7 @@ self.onmessage = e => {
     } else if (op === 'read') {
       const boards = e.data.boards.map(unpackBoard);
       // (the app's pieces, to start from: e.data.glyphs, grey pictures of them alone on a light square)
-      readBoards(boards, { examples: (e.data.glyphs || []).map(g => pieceExample(g.type, g)) });
+      readBoards(boards, { examples: (e.data.glyphs || []).map(g => pieceExample(g.type, g)), labels: e.data.labels || [] });
       self.postMessage({ id, readings: boards.map(b => ({ placement: b.pieces ? placement(b) : null, sure: b.sure || 0, alts: b.alts || [] })) });
     } else throw new Error(`unknown request ${op}`);
   } catch (err) {

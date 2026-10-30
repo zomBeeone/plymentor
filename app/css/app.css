@@ -598,7 +598,7 @@ body.start-page { overflow: auto; min-height: 100%; display: flex; align-items: 
 .bk-diagram:hover { box-shadow: inset 0 0 0 2px rgb(98 153 36 / 0.9); background: rgb(98 153 36 / 0.08); }
 .bk-diagram.bk-shown { box-shadow: inset 0 0 0 3px #2c6ab0, 0 0 0 2px rgb(54 146 231 / 0.35); }
 .bk-diagram::after { content: '♟'; position: absolute; right: -8px; top: -8px; width: 18px; height: 18px; border-radius: 50%; background: #629924; color: #fff; font-size: 12px; line-height: 18px; text-align: center; box-shadow: 0 1px 3px rgb(0 0 0 / 0.4); }
-.bk-diagram.unread { cursor: help; }
+.bk-diagram.unread { cursor: pointer; }
 .bk-diagram.unread:hover { box-shadow: inset 0 0 0 2px rgb(110 104 96 / 0.9); background: none; }
 .bk-diagram.unread::after { content: '?'; background: #6e6860; }
 
@@ -624,7 +624,7 @@ body.start-page { overflow: auto; min-height: 100%; display: flex; align-items: 
 .bk-figure[data-d] .bk-figbox:hover { box-shadow: 0 0 0 2px rgb(98 153 36 / 0.9); }
 .bk-figure[data-d].bk-shown .bk-figbox { box-shadow: 0 0 0 3px #2c6ab0, 0 0 0 5px rgb(54 146 231 / 0.35); }
 .bk-figure[data-d] .bk-figbox::after { content: '♟'; position: absolute; right: -8px; top: -8px; width: 18px; height: 18px; border-radius: 50%; background: #629924; color: #fff; font-size: 12px; line-height: 18px; text-align: center; box-shadow: 0 1px 3px rgb(0 0 0 / 0.4); }
-.bk-figure[data-d].unread .bk-figbox { cursor: help; }
+.bk-figure[data-d].unread .bk-figbox { cursor: pointer; }
 .bk-figure[data-d].unread .bk-figbox:hover { box-shadow: 0 0 0 2px rgb(110 104 96 / 0.9); }
 .bk-figure[data-d].unread .bk-figbox::after { content: '?'; background: #6e6860; }
 
@@ -637,3 +637,20 @@ body.start-page { overflow: auto; min-height: 100%; display: flex; align-items: 
 .book-page .bk-m.bk-cur { background: rgb(255 200 40 / 0.6); }
 .book-page .bk-now, .book-page .bk-m.bk-now { background: rgb(54 146 231 / 0.5); box-shadow: inset 0 -2px 0 #2c6ab0; }
 .book-page.bk-pdf.bk-wide { overflow-y: auto; align-items: flex-start; padding: 8px 0; }
+/* the board editor (a diagram set right by the student): the pieces to put on it above and below the board */
+.board-editor { display: flex; flex-direction: column; gap: 6px; width: calc(var(--board-size) + 26px); }
+.board-editor .be-board { width: var(--board-size); height: var(--board-size); align-self: center; }
+.be-title { font-size: 13px; color: var(--strong); font-weight: 600; }
+.be-pieces { display: flex; justify-content: center; gap: 2px; }
+.be-piece { width: calc(var(--board-size) / 9); height: calc(var(--board-size) / 9); max-width: 52px; max-height: 52px; border: 1px solid transparent; border-radius: 6px; background: var(--panel2) center / 86% no-repeat; cursor: pointer; padding: 0; }
+.be-piece:hover { border-color: #4a4642; }
+.be-piece.active { border-color: #2c6ab0; background-color: rgb(44 106 176 / 0.35); }
+.be-tools, .be-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.be-actions { justify-content: flex-end; }
+.be-problem { font-size: 12.5px; color: #e8a33d; }
+.book-fix { margin-left: auto; }
+/* a page zoomed to a size of the student's: it scrolls both ways (a page wider than the panel starts at its left side) */
+.book-page.bk-pdf.bk-zoom { overflow: auto; align-items: flex-start; justify-content: safe center; padding: 8px 12px; }
+.book-zoom { display: inline-flex; align-items: center; gap: 4px; }
+.book-zoom input[type='range'] { width: 110px; }
+.book-zoom-pct { font-size: 12px; min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; }

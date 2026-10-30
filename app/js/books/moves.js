@@ -56,6 +56,8 @@ function played(pos, uci) {
 
 // How many of the positions the reading went through last a move may go back to (see pick).
 const SEEN = 500;
+// How many squares a picture's reading may have wrong and still be a position of the line read (see diagram).
+const LOOSE = 14;
 
 /** The move number and side to move `plies` half-moves after a position: { num, side }. */
 const afterPlies = (pos, plies) => ({ num: pos.fullmoves + Math.floor((plies + (pos.turn === 'black' ? 1 : 0)) / 2), side: (plies % 2 === 0) === (pos.turn === 'white') ? 'white' : 'black' });
@@ -68,6 +70,17 @@ const differ = (a, b) => {
   for (let i = 0; i < 64; i++) if (a[i] !== b[i]) n++;
   return n;
 };
+
+/**
+ * Whether a piece placement may be a game's position: a king a side, no pawn on the first or last rank, no more of a
+ * piece than a side has (two queens at most).
+ */
+function possible(placement) {
+  const s = squares(placement);
+  const count = c => s.split(c).length - 1;
+  if (count('K') !== 1 || count('k') !== 1 || /[Pp]/.test(s.slice(0, 8) + s.slice(56))) return false;
+  return Object.entries({ P: 8, N: 2, B: 2, R: 2, Q: 2 }).every(([c, most]) => count(c) <= most && count(c.toLowerCase()) <= most);
+}
 
 /** The castling a diagram's position may still have: each king and rook on its square. */
 function castlingOf(placement) {
@@ -274,6 +287,29 @@ export class MoveTracker {
     this.opened = false; // a bracket opened since the last move
     this.lastReal = false; // the last move continued the line being read (not one shown on its own)
     this.restated = null; // the move a spelled-out move in a bracket said again last (see play)
+    this.recent = []; // whether each of the last numbered moves of the game being read found its position
+    // The game's own line, as a reader keeps it — not the first move a book named at each turn (a note's, often): where
+    // its last numbered move at a paragraph's start, and the moves written right after it, got to (see play).
+    this.spine = null;
+    this.spineTree = null;
+  }
+
+  /** The game's own line got to `node` (of the game being read). */
+  grow(node) {
+    this.spine = node;
+    this.spineTree = this.tree;
+  }
+
+  /** A diagram of the game being read at `node`: the game's own line goes on to it when it is further along that line. */
+  reach(node) {
+    if (this.spineTree !== this.tree) return this.grow(node);
+    for (let n = node; n; n = n.parent) if (n === this.spine) return this.grow(node);
+  }
+
+  /** A numbered move of the text found its position, or not (the last 8 are kept: see diagram). */
+  placed(ok) {
+    this.recent.push(ok);
+    if (this.recent.length > 8) this.recent.shift();
   }
 
   get cur() {
@@ -323,6 +359,8 @@ export class MoveTracker {
     this.cur = this.tree.root;
     this.returns = [];
     this.lastReal = true;
+    this.recent = [];
+    this.grow(this.cur);
     return { tree: this.tree, node: this.cur };
   }
 
@@ -333,17 +371,22 @@ export class MoveTracker {
    * options: ['B', 'P', '.'] }], the reading first). The line goes on from the position: one of the game being read
    * when it is there (the line read so far, the main line, a move on), else a new game from it — its side to move and
    * move number from the first move after it, a misread square put right by that move; or, when the first move after
-   * it is the one that led to it (its caption: "Position after: 31. Nf3"), the other side to move. Returns { tree,
+   * it is the one that led to it (its caption: "Position after: 31. Nf3"), the other side to move. A picture read with
+   * more squares wrong (a white piece on a hatched square lost, a rook read as a bishop: up to LOOSE of them) is the
+   * position of the line read it is most like when the moves written after it — their numbers too — go on from there,
+   * and further than from the picture as read: a book's diagram in a game is the game's position. Returns { tree,
    * node }, or null when it shows no position.
    */
   diagram(placement, { side = null, said = null, next = [], near = 0, alts = [] } = {}) {
     const first = next[0];
     const want = squares(placement);
     this.caption = null;
+    let loose = null;
     if (this.tree) {
       let best = null;
       const main = mainLine(this.tree);
-      for (const n of [...this.cur.children, ...this.tree.path(this.cur).reverse(), ...main.reverse()]) {
+      const known = [...new Set([...this.cur.children, ...this.tree.path(this.cur).reverse(), ...main.reverse()])];
+      for (const n of known) {
         if (side && turn(n)[0] !== side) continue;
         const d = differ(want, squares(n.fen.split(' ')[0]));
         // (the words after a diagram may talk of the other side's moves — "Black to move loses" —: the position the
@@ -355,8 +398,19 @@ export class MoveTracker {
         this.cur = best.n;
         this.returns = [];
         this.lastReal = true;
-        return { tree: this.tree, node: best.n };
+        this.reach(best.n);
+        return { tree: this.tree, node: best.n, known: true };
       }
+      if (near)
+        for (const n of known) {
+          const d = differ(want, squares(n.fen.split(' ')[0]));
+          if (d > LOOSE || (side && turn(n)[0] !== side)) continue;
+          // (the first move after it may be its caption's, the move that led to it)
+          const led = !!first?.num && !!n.parent && playable(n.parent, first) === n.uci;
+          const run = led ? 1 + runFrom(positionOf(n.fen), next.slice(1)) : runFrom(positionOf(n.fen), next);
+          if (next.length ? run < Math.min(2, next.length) || !next.slice(0, run).some(t => t.num) : d > 3) continue;
+          if (!loose || run > loose.run || (run === loose.run && d < loose.d)) loose = { n, run, d, led };
+        }
     }
     const tries = [placement];
     for (const a of alts)
@@ -396,15 +450,29 @@ export class MoveTracker {
     }
     // (its caption: the first move after it led to it — its piece stands where it went — and the moves after it are
     // played from it with the other side to move, more of them than from it as the position before that move)
+    let caption = null;
     if (first?.num && first.side && (!side || side !== first.side[0]) && ledTo(placement, first)) {
       const s = first.side === 'white' ? 'b' : 'w';
       const fen = `${placement} ${s} ${castlingOf(placement)} - 0 ${first.num + (s === 'w' ? 1 : 0)}`;
       const pos = positionOf(fen);
-      if (pos && 1 + runFrom(pos, next.slice(1)) > (before?.run || 0)) {
-        const r = game(fen, {});
-        this.caption = { moves: [first], node: r.node };
-        return r;
-      }
+      if (pos) caption = { fen, run: 1 + runFrom(pos, next.slice(1)) };
+    }
+    // (the line read's position, when the moves after it go on from there further than from the picture as read — or as
+    // far, when no numbered move was lost on the way to it, or when the picture as read is no game's position)
+    const read = Math.max(before ? before.run : -1, caption ? caption.run : -1);
+    const trusted = this.recent.length >= 2 && this.recent.every(Boolean);
+    if (loose && (!next.length || loose.run > read || (loose.run === read && (trusted || !possible(placement))))) {
+      this.cur = loose.n;
+      this.returns = [];
+      this.lastReal = true;
+      if (loose.led) this.caption = { moves: [first], node: loose.n };
+      this.reach(loose.n);
+      return { tree: this.tree, node: loose.n, known: true };
+    }
+    if (caption && caption.run > (before?.run || 0)) {
+      const r = game(caption.fen, {});
+      this.caption = { moves: [first], node: r.node };
+      return r;
     }
     if (before) return game(before.fen);
     return fallback ? game(fallback) : null;
@@ -518,6 +586,11 @@ export class MoveTracker {
       child.bookShown = false;
       // a move of the line being read comes before the ones only named (the move list shows it first)
       if (node.children[0] !== child && node.children[0].bookShown) this.tree.promote(child);
+      // (the game's own line: a numbered move beginning a paragraph, and the moves written right after it — "12...Nd4"
+      // after the notes on 12.b4, "14. … Be6⏎15. Ne3 Rad8" — or on a line of their own after a page's running head;
+      // not the moves of a note: "In the event of 12...cxb4")
+      const onward = this.spine === node && this.spineTree === this.tree && (!/\p{L}{2,}/u.test(between) || (t.num && /\n[ \t]*$/.test(between)));
+      if (!variation && ((t.num && para) || onward)) this.grow(child);
       this.cur = child;
       this.lastReal = true;
       return { tree: this.tree, node: child, shown: false };
@@ -644,7 +717,8 @@ export class MoveTracker {
     let chosen = legal[scores.indexOf(best)];
     if (para && legal.length > 1) {
       const end = mainLine(this.tree).at(-1);
-      chosen = legal.find((c, i) => c.node === end && scores[i] === best) || chosen;
+      const spine = this.spineTree === this.tree ? this.spine : null;
+      chosen = legal.find((c, i) => c.node === spine && scores[i] === best) || legal.find((c, i) => c.node === end && scores[i] === best) || chosen;
     }
     const tied = new Set(legal.filter((c, i) => scores[i] === best).map(c => c.uci.slice(0, 2))).size;
     if (best > 0 || !this.tree) return chosen && { ...chosen, score: best, tied };
@@ -683,8 +757,10 @@ export class MoveTracker {
     this.trees.push(tree);
     this.tree = tree;
     this.returns = [];
+    this.recent = [];
     this.cur = tree.addMove(tree.root, uci).node;
     this.lastReal = true;
+    this.grow(this.cur);
     return { tree, node: this.cur, shown: false };
   }
 
@@ -700,6 +776,8 @@ export class MoveTracker {
       // (in a bracket: the alternative to the move before — "13.Bg5 (13.Nd5 …)" —, or its reply)
       if (variation && at(cur.parent)) add(cur.parent);
       if (at(cur)) add(cur);
+      // (the game's own line)
+      if (this.spineTree === this.tree && at(this.spine)) add(this.spine);
       if (at(main.at(-1))) add(main.at(-1));
       // (a game from the initial position: "1." begins another game — a book's games, or an opening restated with
       // other moves after it —, unless the reading is at its start: a diagram of the initial position)
@@ -769,14 +847,24 @@ export class BookMoves {
       this.tracker.between(this.gap + unit.text.slice(prevEnd, Math.max(prevEnd, dg.at)));
       this.gap = '';
       prevEnd = Math.max(prevEnd, dg.at);
-      // (the first moves after it — not squares named on their own, which may be pawn moves of either side)
-      const next = unit.moves.filter(t => t.start >= dg.at && (t.num || t.side || !t.pawn)).slice(0, 3);
+      // (the first moves after it — not squares named on their own, which may be pawn moves of either side, unless they
+      // answer the move before: "17. Ng5 c4!")
+      const next = [];
+      for (const t of unit.moves) {
+        if (t.start < dg.at) continue;
+        const prev = next.at(-1);
+        if (t.num || t.side || !t.pawn || (prev && /^\s*$/.test(unit.text.slice(prev.end, t.start)))) next.push(t);
+        if (next.length === 4) break;
+      }
       // (its side to move: as the book marks it — under it, in its caption —, else as the words after it say)
       const side = dg.side || sideMarked(before, unit.text.slice(dg.at, dg.at + 120));
       const said = sideSaid(unit.text.slice(dg.at, dg.at + 200));
       const r = dg.placement ? this.tracker.diagram(dg.placement, { side, said, next, near: dg.font ? 0 : 1, alts: dg.alts || [] }) : null;
       dg.tree = r?.tree || null;
       dg.node = r?.node || null;
+      // (a picture's board that is a position of the line read: the position it shows is known — it teaches the
+      // reading of the book's pieces, see diagrams.js readBoards)
+      dg.known = r?.known && !dg.font ? r.node.fen.split(' ')[0] : null;
       if (dg.node) for (const label of labelsOf(before, unit.text.slice(dg.at, dg.at + 60))) this.labels.set(label, this.labels.has(label) ? null : dg);
     };
     for (const [i, t] of unit.moves.entries()) {
@@ -805,6 +893,7 @@ export class BookMoves {
       const puzzle = solution && this.labels.get(solution.label);
       const solved = !!puzzle && this.tracker.solve(puzzle.tree, puzzle.node, t, solution.direct, ahead);
       const r = this.tracker.play(t, { seq: reply && !solved, ahead, para, between });
+      if (t.num) this.tracker.placed(!!r?.node && !r.shown);
       t.tree = r?.tree || null;
       t.node = r?.node || null;
       if (t.glyph && t.node?.parent) this.learn(t);

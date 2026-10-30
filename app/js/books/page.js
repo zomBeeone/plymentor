@@ -79,7 +79,7 @@ class Page {
       const d = unit?.diagrams[Number(el.dataset.d)];
       el.classList.toggle('unread', !d?.node);
       el.classList.toggle('bk-shown', !!d && d === diagram);
-      el.title = d?.node ? 'Show this position on the board' : 'This diagram could not be read';
+      el.title = d?.node ? 'Show this position on the board' : 'This diagram could not be read: click to set its position up';
     }
     if (at?.unit !== this.unit) return;
     for (const el of this.root.querySelectorAll('.bk-cur, .bk-now')) el.classList.remove('bk-cur', 'bk-now');
@@ -100,13 +100,21 @@ class Page {
   }
 }
 
-/** A PDF page: the whole page as large as fits (zoom 'page'), or as wide as the panel, scrolled with the reading ('width'). */
+/** The zoom of a PDF page the student may choose: from 30% to 300% of the panel's width. */
+export const ZOOM = { min: 30, max: 300 };
+
+/**
+ * A PDF page: the whole page as large as fits (zoom 'page'), as wide as the panel ('width'), or a share of the panel's
+ * width (a number, in %: ZOOM) — the last two scrolled with the reading. `percent`: the page's width as drawn, in % of the
+ * panel's.
+ */
 export class PdfPage extends Page {
   constructor(root, book, handlers, { zoom = 'page' } = {}) {
     super(root, book, handlers);
     root.classList.add('bk-pdf');
     this.zoom = zoom;
-    root.classList.toggle('bk-wide', zoom === 'width');
+    this.percent = null;
+    this.classes();
     this.sheet = document.createElement('div');
     this.sheet.className = 'bk-sheet';
     this.canvas = document.createElement('canvas');
@@ -137,7 +145,8 @@ export class PdfPage extends Page {
   }
 
   async draw(u, unit, n) {
-    const fit = { width: this.root.clientWidth - 24, height: this.zoom === 'width' ? Infinity : this.root.clientHeight - 16 };
+    const panel = Math.max(1, this.root.clientWidth - 24);
+    const fit = typeof this.zoom === 'number' ? { width: (panel * this.zoom) / 100, height: Infinity } : { width: panel, height: this.zoom === 'width' ? Infinity : this.root.clientHeight - 16 };
     const layer = unit && !unit.ocr ? this.layer : null;
     const r = await drawPage(this.book.doc, u + 1, { canvas: this.canvas, layer, fit, cancelled: () => n !== this.drawn });
     if (!r) return;
@@ -146,6 +155,14 @@ export class PdfPage extends Page {
     this.unit = u;
     this.sheet.style.width = `${Math.floor(r.width)}px`;
     this.sheet.style.height = `${Math.floor(r.height)}px`;
+    this.percent = Math.round((r.width / panel) * 100);
+    // (a new zoom keeps the middle of what was in view in the middle)
+    const a = this.anchor;
+    this.anchor = null;
+    if (a) {
+      this.root.scrollLeft = a.x * r.width - this.root.clientWidth / 2;
+      this.root.scrollTop = a.y * r.height - this.root.clientHeight / 2;
+    }
     if (!layer) this.layer.replaceChildren();
     this.layer.classList.toggle('bk-ocr', !!unit?.ocr);
     if (unit?.ocr) ocrLayer(this.layer, unit, r.width, r.height);
@@ -158,6 +175,7 @@ export class PdfPage extends Page {
       });
     this.drawDiagrams(unit);
     this.highlight(this.mark.at, this.mark.now, this.mark.diagram);
+    this.handlers.onPaged?.(); // (the zoom shown: percent)
   }
 
   /** A box over each diagram of the page, to click. */
@@ -183,17 +201,28 @@ export class PdfPage extends Page {
     if (this.unit >= 0) this.show(this.unit);
   }
 
+  classes() {
+    this.root.classList.toggle('bk-wide', this.zoom === 'width');
+    this.root.classList.toggle('bk-zoom', typeof this.zoom === 'number');
+  }
+
   setZoom(zoom) {
+    if (zoom === this.zoom) return;
+    const w = this.sheet.offsetWidth;
+    const h = this.sheet.offsetHeight;
+    // (the point in the middle of the panel, as a share of the page)
+    if (w && h) this.anchor = { x: Math.min(1, (this.root.scrollLeft + this.root.clientWidth / 2 - this.sheet.offsetLeft) / w), y: Math.min(1, (this.root.scrollTop + this.root.clientHeight / 2 - this.sheet.offsetTop) / h) };
     this.zoom = zoom;
-    this.root.classList.toggle('bk-wide', zoom === 'width');
+    this.classes();
     this.resized();
   }
 
-  /** (zoom 'width') The page scrolls so that the sentence being read is in view. */
+  /** (zoomed in) The page scrolls so that the sentence being read is in view. */
   reveal(el) {
     const r = el.getBoundingClientRect();
     const box = this.root.getBoundingClientRect();
     if (r.top < box.top + 30 || r.bottom > box.bottom - 30) this.root.scrollTop += r.top - box.top - box.height / 3;
+    if (r.left < box.left + 8 || r.left > box.right - 40) this.root.scrollLeft += r.left - box.left - 24;
   }
 }
 

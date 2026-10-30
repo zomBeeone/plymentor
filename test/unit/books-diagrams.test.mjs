@@ -445,3 +445,73 @@ test('a scanned page’s boards: in a frame, whatever its squares, and hatched �
   assert.ok(at(found[0], 150, 300));
   assert.equal(findFigureBoards(page, [figure, [0.05, 0.03, 0.95, 0.15]], { whole: false }).length, 2);
 });
+
+// Tesseract's lines (one block, as it reads a page): each word with its box.
+const ocrLine = (y, ...spans) => {
+  const words = spans.flatMap(([x0, x1, text]) => {
+    const parts = text.split(' ');
+    const w = (x1 - x0) / parts.length;
+    return parts.map((t, k) => ({ text: t, confidence: 90, bbox: { x0: Math.round(x0 + k * w), y0: y, x1: Math.round(x0 + (k + 1) * w - 8), y1: y + 18 } }));
+  });
+  return { words, bbox: { x0: words[0].bbox.x0, y0: y, x1: words.at(-1).bbox.x1, y1: y + 18 } };
+};
+
+test('a scanned page in two columns: the left column read before the right one; a table of moves in two columns and a centred head are read across', () => {
+  const left = ['The knight on f6 has to move or', 'be defended before White plays', 'his queen to the long diagonal,', 'and after that the attack on', 'the king will be very hard to', 'meet: Black needs a plan now.'];
+  const right = ['and the bishop comes to e6 at', 'once, with the idea of taking', 'on d5 when the white knight', 'arrives there. Then the black', 'rooks will be ready for the', 'open c-file and the pressure.'];
+  const lines = [ocrLine(40, [330, 410, 'Chapter'], [418, 470, 'Two'])];
+  left.forEach((t, i) => lines.push(ocrLine(100 + i * 30, [50, 395, t], [430, 770, right[i]])));
+  const page = ocrText({ blocks: [{ paragraphs: [{ lines }] }] }, { width: 800, height: 1200 });
+  // (the columns a paragraph after the head; the right column goes on with the left one's sentence: it begins with a
+  // small letter)
+  assert.equal(page.text, `Chapter Two\n\n${left.join('\n')}\n${right.join('\n')}`);
+  // the same lines in Tesseract's order, read across: the two columns' lines one after the other, mixed
+  const across = ocrText({ blocks: [{ paragraphs: [{ lines: lines.map(l => ({ ...l, words: l.words.map(w => ({ ...w, bbox: { ...w.bbox, x0: w.bbox.x0 / 3, x1: w.bbox.x1 / 3 } })) })) }] }] }, { width: 800, height: 1200 });
+  assert.ok(across.text.includes(`${left[0]} ${right[0]}`), 'one column: read across');
+  // a page of two pages side by side: the same; a table of moves (White's and Black's in columns): line by line
+  const moves = [['1 P to K 4', '1 P to Q B 4'], ['2 Kt to K B 3', '2 P to K 3'], ['3 Kt to Q B 3', '3 P to Q R 3'], ['4 P to Q R 4', '4 Kt to Q B 3'], ['5 P to Q 4', '5 P takes P'], ['6 Kt takes P', '6 B to Kt 5']];
+  const table = moves.map(([w, b], i) => ocrLine(100 + i * 30, [60, 60 + 14 * w.length, w], [430, 430 + 14 * b.length, b]));
+  assert.equal(ocrText({ blocks: [{ paragraphs: [{ lines: table }] }] }, { width: 800, height: 1200 }).text, moves.map(m => m.join(' ')).join('\n'));
+});
+
+test('a picture read with squares wrong in a game: the game’s position, when the moves after it go on from there; it teaches the book’s pieces', () => {
+  const book = new BookMoves();
+  // after 3...a6 (the bishop on b5 read as a pawn, the knight on c6 as a king, a pawn on h7 lost): the game's position
+  const misread = 'r1bqkbnr/1ppp1pp1/p1k5/1P2p3/4P3/5N2/PPPP1PPP/RNBQK2R';
+  const u = follow(book, '1.e4 e5 2.Nf3 Nc6 3.Bb5 a6\n\nThe Ruy Lopez.\n\n4.Ba4 Nf6 5.O-O Be7', [{ at: 27, placement: misread }]);
+  const [d] = u.diagrams;
+  assert.equal(d.node, u.moves[5].node, 'the position after 3...a6');
+  assert.equal(d.known, 'r1bqkbnr/1ppp1ppp/p1n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R');
+  assert.ok(u.moves.slice(6).every(m => m.node && m.tree === d.tree && !m.shown));
+  // the same picture in a book whose moves after it do not go on from the game: a game of its own from it
+  const other = new BookMoves();
+  const v = follow(other, '1.e4 e5 2.Nf3 Nc6 3.Bb5 a6\n\nAnother position.\n\n1.Kd1', [{ at: 27, placement: '4k3/8/8/8/8/8/8/4K3', side: 'w' }]);
+  assert.equal(v.diagrams[0].known, null);
+  assert.notEqual(v.diagrams[0].tree, v.moves[0].tree);
+});
+
+test('the positions known of some boards teach the book’s pieces: a rook drawn like no piece of the font is read as a rook', () => {
+  // the book's rook: the font's knight turned round
+  const rook = Float32Array.from({ length: CELL * CELL }, (_, i) => PIECES.n[Math.floor(i / CELL) * CELL + (CELL - 1 - (i % CELL))]);
+  const fens = ['r3k3/8/8/8/8/8/8/4K2R', '4k2r/8/8/8/2n5/8/8/R3K3', '1r2k3/8/8/8/8/8/8/2R1K1N1'];
+  const at = { 0: ['a8', 'h1'], 1: ['h8', 'a1'], 2: ['b8', 'c1'] };
+  const boards = () => fens.map((f, i) => squaresOf(f, { shapes: Object.fromEntries(at[i].map(sq => [sq, rook])) }));
+  const examples = pieceSquares(64).map(p => pieceExample(p.type, p.img));
+  const unknown = boards();
+  readBoards(unknown, { examples });
+  assert.notDeepEqual(unknown.map(placement), fens, 'not read by the font alone');
+  const taught = boards();
+  readBoards(taught, { examples, labels: [fens[0], null, null] });
+  assert.deepEqual(taught.map(placement), fens);
+});
+
+test('OCR: ¢ for e (or c), € for e — the board plays the reading that is legal', () => {
+  const book = new BookMoves();
+  const text = 'White has just played 2.e6.\n\n2...fx¢6 3.Kd1 €5';
+  const u = { text, moves: findMoves(text, { ocr: true }), diagrams: [{ kind: 'diagram', index: 0, at: 0, placement: '4k3/5p2/4P3/8/8/8/8/4K3', side: 'b', font: true }] };
+  u.sentences = findSentences(text, u.moves);
+  book.follow(u);
+  // (2.e6 in the sentence is the move that led to the diagram)
+  assert.deepEqual(u.moves.map(m => `${m.san}${m.node ? '' : '✗'}`), ['e6', 'fxe6', 'Kd1', 'e5']);
+  assert.equal(u.moves[3].node.fen.split(' ')[0], '4k3/8/8/4p3/8/8/8/3K4');
+});
