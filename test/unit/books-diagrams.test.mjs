@@ -8,7 +8,7 @@ import { ocrText } from '../../app/js/books/ocr.js';
 import { findMoves, findSentences, spokenParts } from '../../app/js/books/text.js';
 import { BookMoves, sideMarked } from '../../app/js/books/moves.js';
 import { posFromFen } from '../../app/js/chess.js';
-import { drawBoard, drawPlainBoard, drawCoordinates, drawText, blankPage, pieceSquares } from './diagram-picture.mjs';
+import { drawBoard, drawPlainBoard, drawCoordinates, drawText, drawMark, shrink, blankPage, pieceSquares } from './diagram-picture.mjs';
 
 // A PDF page's text items: a line of text, a board in a chess font (each row twice, in two fonts, as some books set
 // them, with line ends between the rows), its side-to-move mark, and the text under it.
@@ -514,4 +514,121 @@ test('OCR: ¢ for e (or c), € for e — the board plays the reading that is le
   // (2.e6 in the sentence is the move that led to the diagram)
   assert.deepEqual(u.moves.map(m => `${m.san}${m.node ? '' : '✗'}`), ['e6', 'fxe6', 'Kd1', 'e5']);
   assert.equal(u.moves[3].node.fen.split(' ')[0], '4k3/8/8/4p3/8/8/8/3K4');
+});
+
+// A board in a symbol font as The Woodpecker Method sets it: the font's characters in Unicode's private use area (its
+// code plus F000), each row a border glyph with its rank ("À"…"Ç"), the squares (an Alpha's: small letters on light
+// squares, capitals on dark ones, "+" the empty dark square) and the right border ("5"); an empty light square is a
+// space, which pdf.js gives as an item of its own a point wide; a frame row over and under it; the side to move a
+// triangle in another font, by the top row (Black, U+F071) or the bottom one (White, U+F072).
+function woodpeckerBoard(fen, x0, top, mark) {
+  const pua = s => [...s].map(ch => String.fromCharCode(0xf000 + ch.charCodeAt(0))).join('');
+  const glyph = (str, x, y, w = 18) => ({ str, transform: [18, 0, 0, 18, x, y], width: w, height: 18, hasEOL: false, fontName: 'wood' });
+  const eol = (x, y) => ({ str: '', transform: [18, 0, 0, 18, x, y], width: 0, height: 0, hasEOL: true, fontName: 'wood' });
+  const items = [eol(x0, top + 18), glyph(pua('1222222223'), x0, top + 18, 180)];
+  const alpha = { k: 'l', q: 'w', r: 't', b: 'v', n: 'm', p: 'o' };
+  fen.split('/').forEach((row, r) => {
+    const y = top - r * 18;
+    items.push(eol(x0, y), glyph(pua(String.fromCharCode(0xc7 - r)), x0, y));
+    [...row.replace(/\d/g, d => '.'.repeat(Number(d)))].forEach((p, f) => {
+      const light = !((r + f) & 1);
+      const x = x0 + 18 * (f + 1);
+      if (p === '.') items.push(light ? { str: ' ', transform: [18, 0, 0, 18, x, y], width: 1, height: 0, hasEOL: false, fontName: 'wood' } : glyph(pua('+'), x, y));
+      else {
+        const ch = p === p.toLowerCase() ? alpha[p] : p.toLowerCase();
+        items.push(glyph(pua(light ? ch : ch.toUpperCase()), x, y));
+      }
+    });
+    items.push(glyph(pua('5'), x0 + 162, y));
+  });
+  items.push(eol(x0, top - 144), glyph(pua('7ÈÉÊËÌÍÎÏ9'), x0, top - 144, 180));
+  items.push({ str: mark === 'b' ? '\uF071' : '\uF072', transform: [15, 0, 0, 15, x0 + 166, mark === 'b' ? top + 4 : top - 122], width: 14.7, height: 15, hasEOL: false, fontName: 'marks' });
+  return items;
+}
+
+test('a board in a symbol font’s private use characters (The Woodpecker Method’s): its narrow spaces, frame, row of pieces, mark and number — its solution far after it', () => {
+  const viewport = { width: 450, height: 700, convertToViewportPoint: (x, y) => [x, 700 - y] };
+  const fens = ['3r2k1/5ppp/8/8/8/8/5PPP/6K1', '6rk/6pp/8/6N1/8/8/PPPPPPPP/4K3'];
+  // (a board's number at its top left corner — a column's numbers come first in the text, then its boards)
+  const number = (str, y) => ({ str, transform: [11, 0, 0, 11, 22, y], width: 6, height: 11, hasEOL: true, fontName: 'serif' });
+  const items = [number('7', 595), number('8', 395), ...woodpeckerBoard(fens[0], 37.6, 588, 'b'), ...woodpeckerBoard(fens[1], 37.6, 388, 'w')];
+  items.push({ str: 'Ashford – Brennan, Lisbon 1931', transform: [10, 0, 0, 10, 60, 200], width: 150, height: 10, hasEOL: true, fontName: 'serif' });
+  const page = pageText({ items }, viewport);
+  assert.deepEqual(
+    page.diagrams.map(d => [d.placement, d.side, d.label]),
+    [
+      [fens[0], 'b', '7'],
+      [fens[1], 'w', '8'],
+    ],
+  );
+  // (its glyphs, frame and number are no text)
+  assert.equal(page.text.trim(), 'Ashford – Brennan, Lisbon 1931');
+  // the solutions, pages later: each from its own puzzle — "7. Players, place" on the line before its first move
+  const book = new BookMoves();
+  const puzzles = follow(book, page.text, page.diagrams.map(d => ({ ...d })));
+  follow(book, 'Some other pages.\n\n1.e4 e5 2.Nf3 Nc6 3.Bb5 a6');
+  const u = follow(book, 'Solutions\n7. Tom Ashford – Paul Brennan, Lisbon 1931\n30...Rd1# 0–1\n8. Paul Brennan – J. Corder, Oporto 1932\n25.Nf7#\n');
+  assert.deepEqual(
+    u.moves.map(m => [m.node?.parent, m.tree]),
+    puzzles.diagrams.map(d => [d.node, d.tree]),
+  );
+  assert.ok(u.moves.every(m => posFromFen(m.node.fen).isCheckmate()));
+});
+
+test('a diagram that leaves out a king (a puzzle book’s, a beginner’s book’s): its moves played with the king put in where nothing attacks it', () => {
+  // CT-Art's: the attacker's king left out — 1.Qg7# from it
+  let u = follow(new BookMoves(), 'Puzzle 89\n\n1.Qg7#', [{ at: 11, placement: '7k/5p1p/5PpQ/8/8/8/8/8', font: true }]);
+  const [d] = u.diagrams;
+  assert.ok(d.node, 'a position');
+  // (the diagram's pieces where they are, a white king more, attacked by nothing)
+  assert.equal(d.node.fen.split(' ')[0].replace('K', '1').replace(/\d+/g, n => '1'.repeat([...n].reduce((s, c) => s + Number(c), 0))), '7k/5p1p/5PpQ/8/8/8/8/8'.replace(/\d+/g, n => '1'.repeat(Number(n))));
+  assert.ok(!posFromFen(d.node.fen.replace(' w ', ' b ')).isCheck());
+  assert.ok(posFromFen(u.moves[0].node.fen).isCheckmate());
+  // a beginner's book: no king at all — the rook's move played
+  u = follow(new BookMoves(), 'The rook moves along files and ranks:\n\n1.Ra8', [{ at: 39, placement: '8/8/8/8/8/8/8/R7', font: true }]);
+  assert.ok(u.diagrams[0].node && /K/.test(u.diagrams[0].node.fen) && /k/.test(u.diagrams[0].node.fen));
+  assert.ok(u.moves.every(m => m.node));
+  // the position the text just reached, drawn without White's king: that position
+  u = follow(new BookMoves(), '1.e4 e5 2.Nf3 Nc6\n\nNow 3.Bb5 is the Spanish.', [{ at: 18, placement: 'r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQ1B1R', font: true }]);
+  assert.equal(u.diagrams[0].node, u.moves[3].node);
+});
+
+test('an ebook’s small pictures: white pieces’ thin grey outlines keep them whole; the side to move a square beside the board', () => {
+  const examples = pieceSquares(64).map(p => pieceExample(p.type, p.img));
+  const fens = ['r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R', '6k1/5ppp/8/3B4/8/1P6/P4PPP/2R3K1', '4k3/8/8/8/8/8/3PP3/4K3', '2r3k1/5ppp/8/8/8/1P2B3/P4PPP/2R3K1'];
+  // drawn four times larger and shrunk: squares of 25 pixels, outlines half a pixel wide (grey, mostly lighter than
+  // ink) — the side to move a filled square right of the top row (Black), an outline with a shadow left of it (White),
+  // or none
+  const pictures = fens.map((fen, i) => {
+    const big = blankPage(1312, 840);
+    drawPlainBoard(big, i === 1 ? 192 : 20, 20, 100, fen, { stroke: 2 });
+    if (i === 0) drawMark(big, 870, 40, 72, true);
+    if (i === 1) drawMark(big, 60, 40, 72, false, 4);
+    return shrink(big, 4);
+  });
+  const boards = pictures.map((img, i) => {
+    const b = findPictureBoard(img);
+    assert.ok(b, `picture ${i}: a board`);
+    return unpackBoard(JSON.parse(JSON.stringify(packBoard(b))));
+  });
+  assert.deepEqual(boards.map(b => b.side), ['b', 'w', null, null]);
+  readBoards(boards, { examples });
+  assert.deepEqual(boards.map(placement), fens);
+  // (rank numbers beside a board's rows are no mark)
+  const big = blankPage(1312, 840);
+  drawPlainBoard(big, 192, 20, 100, fens[1], { stroke: 2 });
+  drawCoordinates(big, 192, 20, 100);
+  assert.equal(findPictureBoard(shrink(big, 4)).side, undefined);
+});
+
+test('a scan of two pages side by side, each in two columns — notes beginning with their moves too: read column by column', () => {
+  const prose = ['The knight on f6 has to move or', 'be defended before White plays', 'his queen to the long diagonal,', 'and after that the attack on', 'the king will be very hard to', 'meet: Black needs a plan now.'];
+  const col = k => prose.map((t, i) => (k === 1 ? t : prose[(i + k) % 6]));
+  // (the second column's lines are notes, each beginning with a move)
+  const notes = ['10 0-0 is much stronger than', '11 Nxe6 fxe6 12 Qh5+ Ke7 with', '13 Qg5+ Kd6 14 Nf3 and the', '15 Rad1+ wins for White, as', '16 Qxd8 shows. The text move', '17 Bd3 was hardly worse here.'];
+  const columns = [col(1), notes, col(3), col(4)];
+  const xs = [[50, 380], [420, 750], [850, 1180], [1220, 1550]];
+  const lines = [0, 1, 2, 3, 4, 5].map(i => ocrLine(100 + i * 30, ...xs.map(([a, b], k) => [a, b, columns[k][i]])));
+  const page = ocrText({ blocks: [{ paragraphs: [{ lines }] }] }, { width: 1600, height: 1200 });
+  assert.equal(page.text.replace(/\n+/g, '\n'), columns.flat().join('\n'));
 });

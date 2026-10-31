@@ -68,11 +68,11 @@ export function drawBoard(img, x0, y0, size, placement) {
 
 /**
  * Draws a board the way ebooks show them, at (x0, y0), squares of `size` pixels: dark squares of a plain tone (`dark`:
- * grey, or a colour's grey), light ones `light`, a thin frame, a FEN placement on it (white pieces outlined, black ones
- * solid). A picture with a saturation (`img.sat`) gets the squares' (`darkSat`, `lightSat`: a colour's); `marks`
+ * grey, or a colour's grey), light ones `light`, a thin frame, a FEN placement on it (white pieces outlined `stroke`
+ * pixels wide, black ones solid). A picture with a saturation (`img.sat`) gets the squares' (`darkSat`, `lightSat`: a colour's); `marks`
  * colours squares to mark them (a move's): { e4: [tone, saturation] }.
  */
-export function drawPlainBoard(img, x0, y0, size, placement, { dark = 170, light = 245, darkSat = 0, lightSat = 0, marks = {} } = {}) {
+export function drawPlainBoard(img, x0, y0, size, placement, { dark = 170, light = 245, darkSat = 0, lightSat = 0, marks = {}, stroke = Math.max(2, Math.round(size * 0.05)) } = {}) {
   const rows = placement.split('/').map(r => r.replace(/\d/g, d => '.'.repeat(Number(d))));
   const n = size * 8;
   for (let y = 0; y < n; y++)
@@ -90,9 +90,36 @@ export function drawPlainBoard(img, x0, y0, size, placement, { dark = 170, light
       if (ch === '.') return;
       const pts = SHAPES[ch.toLowerCase()].map(([x, y]) => [x0 + c * size + x * size, y0 + r * size + y * size]);
       fillPolygon(img, pts, ch === ch.toLowerCase() ? 0 : 255);
-      strokePolygon(img, pts, Math.max(2, Math.round(size * 0.05)), 0);
+      strokePolygon(img, pts, stroke, 0);
     }),
   );
+}
+
+/**
+ * A picture made `k` times smaller, each pixel the mean of its k × k (an ebook's small diagram: its pieces' outlines thin
+ * grey lines, lighter than ink here and there).
+ */
+export function shrink(img, k) {
+  const out = blankPage(Math.floor(img.width / k), Math.floor(img.height / k));
+  for (let y = 0; y < out.height; y++)
+    for (let x = 0; x < out.width; x++) {
+      let s = 0;
+      for (let dy = 0; dy < k; dy++) for (let dx = 0; dx < k; dx++) s += img.data[(y * k + dy) * img.width + x * k + dx];
+      out.data[y * out.width + x] = Math.round(s / (k * k));
+    }
+  return out;
+}
+
+/**
+ * The side to move marked beside a board: a square of `size` pixels at (x, y), filled (Black to move) or an outline
+ * `line` pixels wide with a shadow three times as wide to its right and under it (White to move), as 100 Endgames You
+ * Must Know's pictures have it.
+ */
+export function drawMark(img, x, y, size, filled, line = 1) {
+  if (filled) return fillRect(img, x, y, size, size, 0);
+  fillRect(img, x + 3 * line, y + 3 * line, size, size, 0);
+  fillRect(img, x, y, size, size, 0);
+  fillRect(img, x + line, y + line, size - 2 * line, size - 2 * line, 255);
 }
 
 /** Each test piece alone on a light square of `size` pixels (a white piece): a "font's" pieces to read boards by. */

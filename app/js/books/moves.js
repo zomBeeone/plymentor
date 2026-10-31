@@ -82,6 +82,58 @@ function possible(placement) {
   return Object.entries({ P: 8, N: 2, B: 2, R: 2, Q: 2 }).every(([c, most]) => count(c) <= most && count(c.toLowerCase()) <= most);
 }
 
+const ROOK_LINES = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+const BISHOP_LINES = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+const STEPS = { n: [[1, 2], [2, 1], [-1, 2], [-2, 1], [1, -2], [2, -1], [-1, -2], [-2, -1]], k: [...ROOK_LINES, ...BISHOP_LINES] };
+
+/**
+ * The squares the pieces of a side (`white`) can go to — a piece's moves and captures, a pawn's steps too, as far as
+ * the board lets it slide —, of a placement's squares (a8 … h1): how many reach each.
+ */
+function reachOf(s, white) {
+  const out = new Uint8Array(64);
+  const free = (r, c) => r >= 0 && r < 8 && c >= 0 && c < 8;
+  for (let i = 0; i < 64; i++) {
+    const p = s[i];
+    if (p === '.' || (p === p.toUpperCase()) !== white) continue;
+    const [r, c] = [i >> 3, i & 7];
+    const type = p.toLowerCase();
+    const up = white ? -1 : 1;
+    const steps = type === 'p' ? [[up, -1], [up, 1], [up, 0], ...(r === (white ? 6 : 1) ? [[2 * up, 0]] : [])] : STEPS[type];
+    if (steps) for (const [dr, dc] of steps) free(r + dr, c + dc) && out[(r + dr) * 8 + c + dc]++;
+    else
+      for (const [dr, dc] of type === 'r' ? ROOK_LINES : type === 'b' ? BISHOP_LINES : [...ROOK_LINES, ...BISHOP_LINES])
+        for (let k = 1; free(r + dr * k, c + dc * k); k++) {
+          out[(r + dr * k) * 8 + c + dc * k]++;
+          if (s[(r + dr * k) * 8 + c + dc * k] !== '.') break;
+        }
+  }
+  return out;
+}
+
+/**
+ * A diagram's piece placement with the kings it leaves out put in — a puzzle book may draw only the pieces that matter
+ * (CT-Art's diagrams lack a side's king half the time), a beginner's book no king at all —: each where it changes
+ * nothing, so that the book's moves can be played: on an empty square no piece can go to (else one the other side's
+ * cannot), the farthest from the pieces, a corner first. The placement as it is when it has a king a side, or when no
+ * square will do.
+ */
+function withKings(placement) {
+  let s = squares(placement);
+  for (const k of ['K', 'k']) {
+    if (s.includes(k)) continue;
+    const mine = reachOf(s, k === 'K');
+    const theirs = reachOf(s, k !== 'K');
+    const pieces = [...Array(64).keys()].filter(i => s[i] !== '.');
+    const far = i => Math.min(8, ...pieces.map(j => Math.max(Math.abs((i >> 3) - (j >> 3)), Math.abs((i & 7) - (j & 7)))));
+    const corner = i => Math.abs((i >> 3) - 3.5) + Math.abs((i & 7) - 3.5);
+    const order = [...Array(64).keys()].filter(i => s[i] === '.' && !theirs[i]).sort((a, b) => !mine[b] - !mine[a] || far(b) - far(a) || corner(b) - corner(a));
+    if (!order.length) return placement;
+    s = s.slice(0, order[0]) + k + s.slice(order[0] + 1);
+  }
+  return placementOf(s);
+}
+
 /** The castling a diagram's position may still have: each king and rook on its square. */
 function castlingOf(placement) {
   const s = squares(placement);
@@ -374,12 +426,16 @@ export class MoveTracker {
    * it is the one that led to it (its caption: "Position after: 31. Nf3"), the other side to move. A picture read with
    * more squares wrong (a white piece on a hatched square lost, a rook read as a bishop: up to LOOSE of them) is the
    * position of the line read it is most like when the moves written after it — their numbers too — go on from there,
-   * and further than from the picture as read: a book's diagram in a game is the game's position. Returns { tree,
-   * node }, or null when it shows no position.
+   * and further than from the picture as read: a book's diagram in a game is the game's position. A font's diagram that
+   * leaves out a king is that king's position of the line read, or a game with the king put in (withKings). Returns {
+   * tree, node }, or null when it shows no position.
    */
   diagram(placement, { side = null, said = null, next = [], near = 0, alts = [] } = {}) {
     const first = next[0];
     const want = squares(placement);
+    // (a font's diagram may leave out a king: it is compared without that king, and played with it put in)
+    const lacks = near ? '' : ['K', 'k'].filter(k => !want.includes(k)).join('');
+    const kingless = sq => (lacks ? sq.replace(new RegExp(`[${lacks}]`, 'g'), '.') : sq);
     this.caption = null;
     let loose = null;
     if (this.tree) {
@@ -388,7 +444,7 @@ export class MoveTracker {
       const known = [...new Set([...this.cur.children, ...this.tree.path(this.cur).reverse(), ...main.reverse()])];
       for (const n of known) {
         if (side && turn(n)[0] !== side) continue;
-        const d = differ(want, squares(n.fen.split(' ')[0]));
+        const d = differ(want, kingless(squares(n.fen.split(' ')[0])));
         // (the words after a diagram may talk of the other side's moves — "Black to move loses" —: the position the
         // reading is at comes first, a square read wrong before the side the words say)
         const score = d + (said && turn(n)[0] !== said ? 0.5 : 0);
@@ -412,6 +468,7 @@ export class MoveTracker {
           if (!loose || run > loose.run || (run === loose.run && d < loose.d)) loose = { n, run, d, led };
         }
     }
+    if (lacks) placement = withKings(placement);
     const tries = [placement];
     for (const a of alts)
       for (const o of a.options.slice(1)) {
@@ -505,15 +562,17 @@ export class MoveTracker {
 
   /**
    * The first numbered move after a diagram whose move number or side to move was a guess: the diagram takes them from
-   * it — not from White's "1." (a game's start, most often), unless it is the diagram's own solution (`solution`).
-   * When it is the move that led to the diagram (its piece where it went, the move after it played from the diagram
-   * with the other side to move: "My last move was 1...Qc7. After 2.g3 …", the diagram at the end of the page before),
-   * the diagram is the position after it: returns 'caption' (see diagram).
+   * it — not from White's "1." (a game's start, most often: the guesses stay, for a puzzle's solution far after it),
+   * unless it is the diagram's own solution (`solution`). When it is the move that led to the diagram (its piece where
+   * it went, the move after it played from the diagram with the other side to move: "My last move was 1...Qc7. After
+   * 2.g3 …", the diagram at the end of the page before), the diagram is the position after it: returns 'caption' (see
+   * diagram).
    */
   settle(t, solution = false, ahead = []) {
     const { root, guess } = this.tree;
+    if (!solution && t.num === 1 && t.side === 'white') return null;
     this.tree.guess = null;
-    if (this.cur !== root || root.children.length || (!solution && t.num === 1 && t.side === 'white')) return null;
+    if (this.cur !== root || root.children.length) return null;
     const f = root.fen.split(' ');
     if (guess.side) f[1] = t.side === 'black' ? 'b' : 'w';
     if (guess.number) f[5] = String(t.num);
@@ -865,7 +924,8 @@ export class BookMoves {
       // (a picture's board that is a position of the line read: the position it shows is known — it teaches the
       // reading of the book's pieces, see diagrams.js readBoards)
       dg.known = r?.known && !dg.font ? r.node.fen.split(' ')[0] : null;
-      if (dg.node) for (const label of labelsOf(before, unit.text.slice(dg.at, dg.at + 60))) this.labels.set(label, this.labels.has(label) ? null : dg);
+      // (its number: by its corner, as the page has it, else in the text around it)
+      if (dg.node) for (const label of dg.label ? [dg.label] : labelsOf(before, unit.text.slice(dg.at, dg.at + 60))) this.labels.set(label, this.labels.has(label) ? null : dg);
     };
     for (const [i, t] of unit.moves.entries()) {
       while (d < diagrams.length && diagrams[d].at <= t.start) diagram(diagrams[d++]);

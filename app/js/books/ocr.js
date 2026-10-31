@@ -86,8 +86,9 @@ function gutterOf(lines, width) {
  * block of lines — its own page layout drops whole parts of a book's columns, and reads less well —, so on a page in two
  * columns a line holds a line of each: its words are parted at the gutter, and a stretch of lines whose parts are lines
  * of text (most of them ending where their column ends, as a book's lines do — or long, of several words) is read
- * column by column, the left one first. A table of moves in two columns ("1 P to K 4   1 P to Q B 4": short, ragged) is
- * no columns of text: read line by line, as are lines across the gutter (a heading, the running head). A column's
+ * column by column, the left one first — each column looked at for columns of its own (two pages side by side, each in
+ * two). A table of moves in two columns ("1 P to K 4   1 P to Q B 4": short, ragged) is no columns of text: read line by
+ * line, as are lines across the gutter (a heading, the running head). A column's
  * paragraphs: a line set in, or after a short line that ends a sentence; the right column goes on with the left one's
  * paragraph when it begins with a small letter.
  */
@@ -111,13 +112,20 @@ export function readingOrder(lines, width) {
       return Math.abs(x1 - ends[p.k]) <= width * 0.02 || (x1 - p.words[0].bbox.x0 >= columns[p.k] * 0.6 && p.words.length >= 4);
     };
     const full = parts.filter(text).length;
-    // (a table's cells begin with their move numbers)
+    // (a table's cells begin with their move numbers, and are short: a book's columns of notes are lines of text, many
+    // of them beginning with a move too)
     const numbered = parts.filter(p => /^\d/.test(p.words[0].text.trim())).length;
-    if (section.length < 3 || full < 3 || full < parts.length * 0.5 || numbered >= parts.length * 0.5) out.push(...section);
+    if (section.length < 3 || full < 3 || full < parts.length * 0.5 || (numbered >= parts.length * 0.5 && full < parts.length * 0.8)) out.push(...section);
     else
       for (const right of [false, true]) {
         const col = section.map(l => side(l, right)).filter(p => p.length).map(p => lineOf(p, false));
         if (!col.length) continue;
+        // (two pages side by side: each page may be in two columns of its own)
+        const inner = readingOrder(col, width);
+        if (inner !== col) {
+          out.push(...inner);
+          continue;
+        }
         const margin = middle(col.map(l => l.box.x0).sort((a, b) => a - b));
         const end = middle(col.map(l => l.box.x1).sort((a, b) => b - a).slice(0, Math.max(1, col.length >> 1)));
         col.forEach((l, i) => {

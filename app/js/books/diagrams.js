@@ -348,13 +348,16 @@ function hatchedInk(ink, n) {
  * The square's background — white, or hatched for a dark square — is everything reachable from the square's sides
  * between the ink; thin strokes left over (hatching, outlines) are taken off by opening, then the shape is filled. (A
  * piece whose outline is broken on a dark square comes out smaller: the book's other pieces of its kind make up for it.)
+ * On a plain square (`wall`: a grey a little darker than the square's own), a piece's outline lighter than the ink — a
+ * small picture's thin grey lines — keeps the background out too.
  */
-export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false } = {}) {
+export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false, wall = 0 } = {}) {
   const inset = Math.max(1, Math.round(size * 0.04));
   const X = Math.round(x0) + inset;
   const Y = Math.round(y0) + inset;
   const n = Math.max(8, Math.round(size) - 2 * inset);
   const dark = new Uint8Array(n * n);
+  const lines = wall > ink ? new Uint8Array(n * n) : null;
   let inkCount = 0;
   for (let y = 0; y < n; y++)
     for (let x = 0; x < n; x++) {
@@ -365,6 +368,7 @@ export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false } =
         dark[y * n + x] = 1;
         inkCount++;
       }
+      if (lines && v < wall) lines[y * n + x] = 1;
     }
   // (a hatched square whose hatching is lighter than the ink — a small scan's grey strokes — is read as a light one:
   // only its pieces are ink)
@@ -372,6 +376,7 @@ export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false } =
   // the background: reachable from the sides through light pixels (the ink grown by a pixel first, closing gaps in a
   // piece's outline — not on a square hatched in ink: that would close the hatching's gaps too)
   const walls = crisp ? dark : morph(dark, n, n, 1, true);
+  if (lines && !crisp) for (let i = 0; i < walls.length; i++) walls[i] |= lines[i];
   const reach = new Uint8Array(n * n);
   const stack = [];
   for (let i = 0; i < n; i++) for (const p of [i, (n - 1) * n + i, i * n, i * n + n - 1]) if (!walls[p] && !reach[p]) (reach[p] = 1), stack.push(p);
@@ -639,8 +644,15 @@ const FONTS = [
   { empty: '0Z', pieces: TEX, onLight: ch => 'pnbrqk'.includes(ch.toLowerCase()) },
 ];
 
-// The side to move, a square glyph by the board's bottom row: white (hollow) or black (filled).
-const MARKS = { n: 'b', '■': 'b', '□': 'w', '\x86': 'w' };
+// The side to move, a glyph beside the board: white (hollow) or black (filled) — a square by its bottom row, or (a
+// symbol font's triangles, The Woodpecker Method's: U+F071 ▼ by the top row, U+F072 △ by the bottom one) either.
+const MARKS = { n: 'b', '■': 'b', '□': 'w', '\x86': 'w', '\uF071': 'b', '\uF072': 'w' };
+
+// A symbol font's characters may come in Unicode's private use area: the font's own code plus F000 (a board's "+" as
+// U+F02B). As the font's codes.
+const unPrivate = s => s.replace(/[\uF020-\uF0FF]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xf000));
+// (a light square drawn as a space comes from pdf.js as a space a point wide: it is a glyph wide)
+const advance = (it, h) => (it.str === ' ' && it.width < h * 0.5 ? h : it.width || 0);
 
 /**
  * The runs of glyphs of a page's text items: an item, with the items right after it on the same line in the same font
@@ -657,14 +669,14 @@ function glyphRuns(items) {
     const [x, y] = [it.transform[4], it.transform[5]];
     const h = it.height || Math.abs(it.transform[3]);
     const last = run && items[run.ids.at(-1)];
-    const next = last && it.fontName === last.fontName && Math.abs(y - run.y) < 0.3 && Math.abs(h - run.h) < 0.5 && Math.abs(x - (last.transform[4] + last.width)) < Math.max(1, h * 0.2);
+    const next = last && it.fontName === last.fontName && Math.abs(y - run.y) < 0.3 && Math.abs(h - run.h) < 0.5 && Math.abs(x - (last.transform[4] + advance(last, run.h))) < Math.max(1, h * 0.2);
     if (next) {
       run.ids.push(i);
-      run.str += it.str;
-      run.w += it.width;
+      run.str += unPrivate(it.str);
+      run.w += advance(it, h);
       return;
     }
-    run = { ids: [i], str: it.str, x, y, h, w: it.width || 0 };
+    run = { ids: [i], str: unPrivate(it.str), x, y, h, w: advance(it, h) };
     runs.push(run);
   });
   return runs;
@@ -675,28 +687,32 @@ function glyphRuns(items) {
  * squares: a row of pieces — "rmblkans" — that only a board's other rows show to be one) } or null.
  */
 function rowIn(run, font) {
-  const glyphs = s => [...s].every(ch => font.empty.includes(ch) || Object.hasOwn(font.pieces, ch));
-  const empty = s => [...s].filter(ch => font.empty.includes(ch)).length;
-  const n = [...run.str].length;
+  const glyph = ch => font.empty.includes(ch) || Object.hasOwn(font.pieces, ch);
+  const chars = [...run.str];
+  const n = chars.length;
   if (n < 8 || n > 12) return null;
   for (let offset = 0; offset + 8 <= n; offset++) {
-    const s = [...run.str].slice(offset, offset + 8).join('');
-    if (glyphs(s) && empty(s) >= 2) return { offset, full: false };
+    const s = chars.slice(offset, offset + 8);
+    if (s.every(glyph) && s.filter(ch => font.empty.includes(ch)).length >= 2) return { offset, full: false };
   }
-  // (a row of pieces: the whole run, nothing around it)
-  return n === 8 && glyphs(run.str) ? { offset: 0, full: true } : null;
+  // (a row of pieces: the whole run, or eight glyphs between two of the font's border glyphs)
+  if (n === 8) return chars.every(glyph) ? { offset: 0, full: true } : null;
+  const offset = n === 10 && !glyph(chars[0]) && !glyph(chars[9]) && chars.slice(1, 9).every(glyph) ? 1 : -1;
+  return offset > 0 ? { offset, full: true } : null;
 }
 
 /**
  * The boards set in a chess font among a PDF page's text items ({ str, transform, width, height, fontName }): eight
  * rows of eight characters (one item each, or one item per square), one under the other (a row drawn twice, in two
- * fonts, is one). The board's coordinates (rank numbers, file letters around it) are part of it. Returns [{ items (the
- * indices of its rows, coordinates and mark), rows (of its rows), placement (FEN), side ('w', 'b' or null: no mark),
- * x0, y0, x1, y1 (PDF points, y upwards) }].
+ * fonts, is one). The board's coordinates (rank numbers, file letters around it) and its frame are part of it. Returns
+ * [{ items (the indices of its rows, coordinates, frame, mark and number), rows (of its rows and frame), placement
+ * (FEN), side ('w', 'b' or null: no mark), label (the number by its corner, or none), x0, y0, x1, y1 (PDF points, y
+ * upwards) }].
  */
 export function fontBoards(items) {
   const rows = [];
-  for (const run of glyphRuns(items))
+  const runs = glyphRuns(items);
+  for (const run of runs)
     for (const font of FONTS) {
       const r = rowIn(run, font);
       if (!r) continue;
@@ -741,6 +757,16 @@ export function fontBoards(items) {
       .join('/');
     const pitch = (first.y - board[7].y) / 7;
     const b = { items: [...ids], rows: ids, placement, side: null, x0: first.x, y0: board[7].y - pitch * 0.22, x1: first.x + (first.w || first.h * 8), y1: first.y + pitch * 0.78 };
+    // its frame: the font's border glyphs in a row right over it and under it
+    for (const run of runs) {
+      if (run.ids.some(i => used.has(i)) || items[run.ids[0]].fontName !== items[first.i].fontName || Math.abs(run.h - first.h) > 0.5) continue;
+      const over = Math.abs(run.y - first.y - pitch) < pitch * 0.3;
+      const under = Math.abs(board[7].y - run.y - pitch) < pitch * 0.3;
+      if (!(over || under) || run.x >= b.x1 || run.x + run.w <= b.x0) continue;
+      b.items.push(...run.ids);
+      ids.push(...run.ids);
+      for (const i of run.ids) used.add(i);
+    }
     // its coordinates: rank numbers beside its rows, file letters under or over it
     items.forEach((it, i) => {
       if (used.has(i) || typeof it.str !== 'string' || !it.transform || !/^(?:[1-8]|[a-h]|(?:[a-h] ?){8}|\s+)$/.test(it.str)) return;
@@ -753,17 +779,33 @@ export function fontBoards(items) {
         used.add(i);
       }
     });
-    // the side to move: a lone glyph left or right of the board, about level with its bottom row
+    // the side to move: a lone glyph left or right of the board, about level with its bottom row or its top one
     items.forEach((it, i) => {
       if (b.side || typeof it.str !== 'string' || !it.transform || !Object.hasOwn(MARKS, it.str)) return;
       const x = it.transform[4];
       const y = it.transform[5];
       const beside = (x < b.x0 && x > b.x0 - pitch * 2) || (x > b.x1 && x < b.x1 + pitch * 2);
-      if (beside && y > b.y0 - pitch * 0.5 && y < board[6].y && (it.height || 0) > pitch * 0.6) {
+      const level = (y > b.y0 - pitch * 0.5 && y < board[6].y) || (y > board[1].y && y < b.y1 + pitch * 0.5);
+      if (beside && level && (it.height || 0) > pitch * 0.6) {
         b.side = MARKS[it.str];
         b.items.push(i);
       }
     });
+    // its number (a puzzle's, which its solution far after it names): a number by its top left corner — The Woodpecker
+    // Method's, in a circle; their text comes before the boards, a column's numbers together
+    let label = null;
+    items.forEach((it, i) => {
+      if (used.has(i) || typeof it.str !== 'string' || !it.transform || !/^\d{1,4}$/.test(it.str.trim())) return;
+      const x = it.transform[4] + (it.width || 0);
+      const y = it.transform[5];
+      if (x > b.x0 + pitch * 0.2 || x < b.x0 - pitch * 3 || y > b.y1 + pitch || y < b.y1 - pitch * 2.5) return;
+      if (!label || Math.abs(y - b.y1) < Math.abs(label.y - b.y1)) label = { i, y, str: it.str.trim() };
+    });
+    if (label) {
+      b.label = label.str;
+      b.items.push(label.i);
+      used.add(label.i);
+    }
     out.push(b);
   }
   return out;
@@ -1169,8 +1211,9 @@ export function findBoards(img, { minSize = Math.round(Math.min(img.width, img.h
  * The board in a picture of its own (an EPUB's diagram): a whole board filling most of the picture (a frame and
  * coordinates around it), its dark squares hatched or plain — grey or coloured. Found by the lines between its squares:
  * the picture's tone, blurred, changes along each of them, across the whole board; then its 64 squares must be light
- * and dark in turn. Returns a board as findBoards gives them (with `hatched`), or null when the picture shows none
- * (`why(reason)` hears why: for tests and tools).
+ * and dark in turn. Returns a board as findBoards gives them (with `hatched`, and `side` when the picture marks the
+ * side to move beside it: markBeside), or null when the picture shows none (`why(reason)` hears why: for tests and
+ * tools).
  */
 export function findPictureBoard(img, { why = () => {} } = {}) {
   const { width: W, height: H, data } = img;
@@ -1307,6 +1350,27 @@ export function findPictureBoard(img, { why = () => {} } = {}) {
   // than the square
   const inkOn = tone => Math.min(150, Math.round(255 * (1 - tone) * 0.7));
   const darkInk = hatched ? 150 : inkOn(darkTone);
+  // (and on a board of plain squares — a book's own picture, not a scan's hatching — a piece's outline is darker than
+  // its square's own grey: the grey along the squares' tops, less a margin as wide as the grey varies there)
+  const wallOf = onDark => {
+    const greys = new Uint32Array(256);
+    let count = 0;
+    for (let row = 0; row < 8; row++)
+      for (let col = 0; col < 8; col++) {
+        if (isDark(row, col) !== onDark || isMark(cellAt[found.r0 + row][found.c0 + col])) continue;
+        const x0 = Math.round(bx.offset + (found.c0 + col) * sx);
+        const y0 = Math.round(by.offset + (found.r0 + row) * sy);
+        for (let y = Math.max(0, y0 + Math.round(sy * 0.08)); y < Math.min(H, y0 + sy * 0.2); y++)
+          for (let x = Math.max(0, x0 + Math.round(sx * 0.08)); x < Math.min(W, x0 + sx * 0.92); x++) greys[data[y * W + x]]++, count++;
+      }
+    const at = q => {
+      for (let v = 0, k = 0; v < 256; v++) if ((k += greys[v]) >= count * q) return v;
+      return 255;
+    };
+    return count ? at(0.5) - Math.max(16, 4 * (at(0.5) - at(0.25))) : 0;
+  };
+  const lightWall = hatched ? 0 : wallOf(false);
+  const darkWall = hatched ? 0 : wallOf(true);
   // the board's own grid: its seven lines inside (between light and dark squares all along, never at the picture's
   // edge), the comb's size and start refined on them
   const [x, fx] = refine(ex, bx.offset + found.c0 * sx, sx);
@@ -1317,11 +1381,66 @@ export function findPictureBoard(img, { why = () => {} } = {}) {
       const darkSquare = isDark(row, col);
       const mark = isMark(cellAt[found.r0 + row][found.c0 + col]);
       const ink = mark ? inkOn(cellAt[found.r0 + row][found.c0 + col].tone) : darkSquare ? darkInk : 150;
-      const shape = cellShape(img, x + col * fx + (fx - size) / 2, y + row * fy + (fy - size) / 2, size, { ink, darkSquare: darkSquare && hatched && !mark });
+      const wall = mark ? 0 : darkSquare ? darkWall : lightWall;
+      const shape = cellShape(img, x + col * fx + (fx - size) / 2, y + row * fy + (fy - size) / 2, size, { ink, darkSquare: darkSquare && hatched && !mark, wall });
       return { darkSquare, shape };
     }),
   );
-  return { x, y, width: 8 * fx, height: 8 * fy, rows: 8, cols: 8, cells, hatched };
+  const board = { x, y, width: 8 * fx, height: 8 * fy, rows: 8, cols: 8, cells, hatched };
+  const side = markBeside(img, board);
+  return side ? { ...board, side } : board;
+}
+
+/**
+ * The side to move as a picture marks it: a small square beside the board, level with its top or bottom row — filled
+ * for Black ('b'), an outline (maybe with a shadow) for White ('w') — alone there (rank numbers and such are no mark);
+ * else null. (100 Endgames You Must Know's pictures have it left or right of the top row.)
+ */
+function markBeside(img, b) {
+  const { width: W, height: H, data } = img;
+  const s = b.width / 8;
+  const strips = [
+    [Math.max(0, Math.round(b.x - s * 1.6)), Math.round(b.x - s * 0.15)],
+    [Math.round(b.x + b.width + s * 0.15), Math.min(W, Math.round(b.x + b.width + s * 1.6))],
+  ];
+  const rows = [
+    [Math.max(0, Math.round(b.y - s * 0.3)), Math.round(b.y + s * 1.3)],
+    [Math.round(b.y + b.height - s * 1.3), Math.min(H, Math.round(b.y + b.height + s * 0.3))],
+  ];
+  for (const [x0, x1] of strips)
+    for (const [y0, y1] of rows) {
+      if (x1 - x0 < s * 0.4 || y1 <= y0) continue;
+      // the ink there: its box, about a square's half to a whole square, about square
+      let minX = Infinity;
+      let maxX = -1;
+      let minY = Infinity;
+      let maxY = -1;
+      let count = 0;
+      for (let y = y0; y < y1; y++)
+        for (let x = x0; x < x1; x++)
+          if (data[y * W + x] < 128) {
+            count++;
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y);
+          }
+      const w = maxX - minX + 1;
+      const h = maxY - minY + 1;
+      if (!count || w < s * 0.35 || h < s * 0.35 || w > s * 1.3 || h > s * 1.3 || w > h * 1.35 || h > w * 1.35) continue;
+      // its middle: ink all over (filled) or none (an outline)
+      let inner = 0;
+      let inked = 0;
+      for (let y = Math.round(minY + h * 0.25); y <= maxY - h * 0.25; y++)
+        for (let x = Math.round(minX + w * 0.25); x <= maxX - w * 0.25; x++) {
+          inner++;
+          if (data[y * W + x] < 128) inked++;
+        }
+      const fill = count / (w * h);
+      if (fill > 0.75 && inked >= inner * 0.9) return 'b';
+      if (fill > 0.1 && fill < 0.6 && inked <= inner * 0.05) return 'w';
+    }
+  return null;
 }
 
 /**
@@ -1474,6 +1593,7 @@ export function packBoard(b) {
   return {
     rows: b.rows,
     cols: b.cols,
+    ...(b.side ? { side: b.side } : {}),
     cells: b.cells.map(row =>
       row.map(({ darkSquare, shape: s }) => ({
         d: darkSquare ? 1 : 0,
@@ -1491,6 +1611,7 @@ export function unpackBoard(p) {
   return {
     rows: p.rows,
     cols: p.cols,
+    side: p.side || null,
     cells: p.cells.map(row =>
       row.map(c => ({
         darkSquare: !!c.d,

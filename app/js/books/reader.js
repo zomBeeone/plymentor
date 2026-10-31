@@ -13,9 +13,10 @@ import { Scanner } from './scan.js';
 import { bookFile, loadCache, saveCache, saveBook } from './library.js';
 import { startReading, prepareReading, cancelReading, readAloud, stopSpeaking } from '../voice.js';
 
-// The version of what is kept of a PDF's pages (pdf.js's version goes with it): 5 since the two columns of a scanned
-// page are read one after the other, and a small scan is read by the OCR at a larger size.
-const TEXT_CACHE = 5;
+// The version of what is kept of a PDF's pages (pdf.js's version goes with it): 6 since chess fonts in Unicode's private
+// use area are read (The Woodpecker Method's boards), a board's number by its corner, and a scan of two pages side by
+// side each in two columns.
+const TEXT_CACHE = 6;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 
 function makeUnit(index, title, text, more, { readings = !!more?.ocr } = {}) {
@@ -45,7 +46,8 @@ function applyFix(d, fix) {
  */
 function pageUnit(u, page, fixes = {}) {
   const diagrams = (page.diagrams || []).map((d, k) => {
-    const out = { at: d.at, placement: d.placement || null, side: d.side || null, font: !!d.font, sure: d.sure, alts: d.alts, box: d.box, kind: 'diagram', unit: u, index: k };
+    // (its side to move: a chess font's mark, or a picture's: board.side)
+    const out = { at: d.at, placement: d.placement || null, side: d.side || d.board?.side || null, font: !!d.font, sure: d.sure, alts: d.alts, box: d.box, label: d.label || null, kind: 'diagram', unit: u, index: k };
     return applyFix(out, fixes[fixKey(out)]);
   });
   return makeUnit(u, `Page ${u + 1}`, page.text, { items: page.items, diagrams, ocr: !!(page.scan && page.scanned) }, { readings: true });
@@ -155,7 +157,9 @@ class Book {
   }
 }
 
-const PICTURES = 2; // the version of what is kept of an EPUB's pictures (2: hatching lighter than ink read as such)
+// The version of what is kept of an EPUB's pictures: 3 since a picture's mark of the side to move is read, and a plain
+// square's grey outlines keep its pieces whole.
+const PICTURES = 3;
 // The version of how a book's boards are read (diagrams.js readBoards): when it changes, the boards kept from before —
 // a scanned PDF's, an EPUB's pictures' — are read again (not looked for again). 3: four of the app's piece sets to start
 // from, the book's known positions teaching its pieces.
@@ -246,7 +250,7 @@ class EpubDiagrams {
         }
         if (!board) continue;
       }
-      const d = { at: b.at, placement: fen?.placement || null, side: fen?.side || null, font: !!fen, sure: fen ? 1 : 0, alts: [], kind: 'diagram', unit: u, index: out.length, path: b.path };
+      const d = { at: b.at, placement: fen?.placement || null, side: fen?.side || board?.side || null, font: !!fen, sure: fen ? 1 : 0, alts: [], kind: 'diagram', unit: u, index: out.length, path: b.path };
       b.diagram = out.length;
       out.push(d);
       const fix = this.book.meta.fixes?.[fixKey(d)];

@@ -58,7 +58,7 @@ export function pageText(content, viewport = null) {
       if (!placed.has(b)) {
         if (text && !text.endsWith('\n')) text += '\n';
         placed.add(b);
-        diagrams.push({ at: text.length, placement: b.placement, side: b.side, font: true, box: viewport ? boxOn(viewport, b) : null });
+        diagrams.push({ at: text.length, placement: b.placement, side: b.side, font: true, box: viewport ? boxOn(viewport, b) : null, ...(b.label ? { label: b.label } : {}) });
       }
       items.push({ start: text.length, end: text.length, skip: true });
       return;
