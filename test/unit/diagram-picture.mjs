@@ -40,14 +40,17 @@ function strokePolygon(img, pts, w, v) {
   }
 }
 
-/** Draws a board at (x0, y0), squares of `size` pixels, with a FEN placement on it. */
-export function drawBoard(img, x0, y0, size, placement) {
+/**
+ * Draws a board at (x0, y0), squares of `size` pixels, with a FEN placement on it — its dark squares' strokes `hatch`
+ * pixels wide every `period` pixels, its white pieces' outlines `stroke` pixels wide.
+ */
+export function drawBoard(img, x0, y0, size, placement, { period = 5, hatch = 2, stroke = Math.max(2, Math.round(size * 0.05)) } = {}) {
   const rows = placement.split('/').map(r => r.replace(/\d/g, d => '.'.repeat(Number(d))));
   const n = size * 8;
   for (let y = 0; y < n; y++)
     for (let x = 0; x < n; x++) {
       const dark = (Math.floor(x / size) + Math.floor(y / size)) % 2 === 1;
-      img.data[(y0 + y) * img.width + x0 + x] = dark && (x + y) % 5 < 2 ? 0 : 255;
+      img.data[(y0 + y) * img.width + x0 + x] = dark && (x + y) % period < hatch ? 0 : 255;
     }
   // the frame
   for (let k = -4; k < n + 4; k++)
@@ -58,8 +61,8 @@ export function drawBoard(img, x0, y0, size, placement) {
       if (ch === '.') return;
       const pts = SHAPES[ch.toLowerCase()].map(([x, y]) => [x0 + c * size + x * size, y0 + r * size + y * size]);
       // a piece covers the hatching: white with a margin, then outlined (a white piece) or solid (a black one)
-      const w = Math.max(2, Math.round(size * 0.05));
-      strokePolygon(img, pts, w * 3, 255);
+      const w = stroke;
+      strokePolygon(img, pts, Math.max(2, Math.round(size * 0.05)) * 3, 255);
       fillPolygon(img, pts, ch === ch.toLowerCase() ? 0 : 255);
       strokePolygon(img, pts, w, 0);
     }),

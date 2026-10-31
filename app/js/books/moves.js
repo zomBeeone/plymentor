@@ -65,6 +65,18 @@ const afterPlies = (pos, plies) => ({ num: pos.fullmoves + Math.floor((plies + (
 /** The 64 squares of a FEN's piece placement, from a8 to h1: a piece's letter or '.'. */
 const squares = placement => placement.split('/').map(r => r.replace(/\d/g, d => '.'.repeat(Number(d)))).join('');
 const placementOf = sq => [0, 1, 2, 3, 4, 5, 6, 7].map(r => sq.slice(r * 8, r * 8 + 8).replace(/\.+/g, m => String(m.length))).join('/');
+/** The name of square `i` of those (0: a8 … 63: h1). */
+const squareName = i => `${'abcdefgh'[i & 7]}${8 - (i >> 3)}`;
+
+/**
+ * The squares the board leaves empty for a position of `tree`: the kings the reader put in where the book's diagram
+ * has none (`tree.hidden`, see withKings), while each still stands where it was put.
+ */
+export function hiddenSquares(tree, fen) {
+  if (!tree?.hidden || !fen) return [];
+  const s = squares(String(fen).split(' ')[0]);
+  return tree.hidden.filter(h => s['abcdefgh'.indexOf(h.square[0]) + (8 - Number(h.square[1])) * 8] === h.piece).map(h => h.square);
+}
 const differ = (a, b) => {
   let n = 0;
   for (let i = 0; i < 64; i++) if (a[i] !== b[i]) n++;
@@ -468,7 +480,11 @@ export class MoveTracker {
           if (!loose || run > loose.run || (run === loose.run && d < loose.d)) loose = { n, run, d, led };
         }
     }
+    // (the kings put in are the game's `hidden`: the board does not show them while they stand there — the book's
+    // diagram has none)
     if (lacks) placement = withKings(placement);
+    const kinged = squares(placement);
+    const hidden = lacks ? [...lacks].filter(k => kinged.includes(k)).map(k => ({ piece: k, square: squareName(kinged.indexOf(k)) })) : null;
     const tries = [placement];
     for (const a of alts)
       for (const o of a.options.slice(1)) {
@@ -488,6 +504,7 @@ export class MoveTracker {
     const game = (fen, g = guess) => {
       const r = this.newGame(fen);
       if (g.number || g.side) this.tree.guess = g;
+      if (hidden?.length) this.tree.hidden = hidden;
       return r;
     };
     let fallback = null;
@@ -498,12 +515,15 @@ export class MoveTracker {
         const pos = positionOf(fen);
         if (!pos) continue;
         if (!first || playableIn(pos, first)) {
-          before = { fen, run: runFrom(pos, next) };
+          // (the picture as read, or with one of its unsure squares read otherwise when more of the moves written after
+          // it can be played then: a white rook read as a knight shows at White's third move)
+          const run = runFrom(pos, next);
+          if (!before || run > before.run) before = { fen, run };
           break;
         }
         if (p === placement) fallback ||= fen;
       }
-      if (before) break;
+      if (before && before.run >= next.length) break;
     }
     // (its caption: the first move after it led to it — its piece stands where it went — and the moves after it are
     // played from it with the other side to move, more of them than from it as the position before that move)
@@ -561,8 +581,9 @@ export class MoveTracker {
   }
 
   /**
-   * The first numbered move after a diagram whose move number or side to move was a guess: the diagram takes them from
-   * it — not from White's "1." (a game's start, most often: the guesses stay, for a puzzle's solution far after it),
+   * The first numbered move after a diagram whose move number or side to move was a guess, that fits there: the diagram
+   * takes them from it — not from White's "1." (a game's start, most often: the guesses stay, for a puzzle's solution
+   * or an exercise's answer far after it),
    * unless it is the diagram's own solution (`solution`). When it is the move that led to the diagram (its piece where
    * it went, the move after it played from the diagram with the other side to move: "My last move was 1...Qc7. After
    * 2.g3 …", the diagram at the end of the page before), the diagram is the position after it: returns 'caption' (see
@@ -571,14 +592,18 @@ export class MoveTracker {
   settle(t, solution = false, ahead = []) {
     const { root, guess } = this.tree;
     if (!solution && t.num === 1 && t.side === 'white') return null;
-    this.tree.guess = null;
-    if (this.cur !== root || root.children.length) return null;
+    if (this.cur !== root || root.children.length) {
+      this.tree.guess = null;
+      return null;
+    }
+    // (a move that fits neither way leaves the guesses: an exercise's answer, pages later, may tell)
     const f = root.fen.split(' ');
     if (guess.side) f[1] = t.side === 'black' ? 'b' : 'w';
     if (guess.number) f[5] = String(t.num);
     const fen = f.join(' ');
     if (positionOf(fen) && playable({ fen }, t)) {
       root.fen = fen;
+      this.tree.guess = null;
       return null;
     }
     const s = t.side === 'white' ? 'b' : 'w';
@@ -589,6 +614,7 @@ export class MoveTracker {
     const pos = positionOf(after);
     if (!pos || (ahead.length && !runFrom(pos, [ahead[0].t]))) return null;
     root.fen = after;
+    this.tree.guess = null;
     this.caption = { moves: [t], node: root };
     return 'caption';
   }
@@ -636,6 +662,8 @@ export class MoveTracker {
     if (chosen) {
       const { node, uci } = chosen;
       if (chosen.tree && chosen.tree !== this.tree) (this.tree = chosen.tree), (this.returns = []);
+      // (an exercise's diagram: its number and side as its answer gives them)
+      if (chosen.fen) (node.fen = chosen.fen), (this.tree.guess = null);
       const { node: child, created } = this.tree.addMove(node, uci);
       if (alone) {
         if (created) child.bookShown = true;
@@ -685,8 +713,11 @@ export class MoveTracker {
     const pos = positionOf(fen);
     const uci = playableIn(pos, t);
     if (!uci || !followOn(null, uci, ahead, 1, pos)) return null;
-    // (a game like a diagram's — but the brackets open stay open: their end goes back to the game it left)
+    // (a game like a diagram's — but the brackets open stay open: their end goes back to the game it left; its kings
+    // put in hidden as there)
+    const { hidden } = this.tree;
     this.tree = new Tree(fen);
+    if (hidden) this.tree.hidden = hidden;
     this.trees.push(this.tree);
     this.cur = this.tree.root;
     const child = this.tree.addMove(this.tree.root, uci).node;
@@ -786,10 +817,20 @@ export class MoveTracker {
     // the places it may be — "6.Kf4 Kh6", back to the main line from a note)
     const need = tree => (tree === this.tree && (!legal.length || /^\s*$/.test(ahead[0].between)) ? 1 : 2);
     for (const [node, tree] of [...this.seen].reverse()) {
-      if (known.has(node) || fullmove(node) !== t.num || turn(node) !== t.side || (node === tree.root && tree.isStandardStart)) continue;
-      const uci = playable(node, t);
-      const score = uci ? followOn(node, uci, ahead) : -1;
-      if (score >= need(tree) && score > best) (best = score), (chosen = { node, uci, tree });
+      // (a diagram not played from yet whose move number — and side — are guesses: an exercise, its answer pages later,
+      // "6. d5 Ne5 7. c4", gives them — not a numbered puzzle: its solution names it)
+      const open = !!t.num && node === tree.root && !!tree.guess?.number && !tree.labelled && !node.children.length;
+      if (known.has(node) || (fullmove(node) !== t.num && !open) || (turn(node) !== t.side && !(open && tree.guess.side && t.side)) || (node === tree.root && tree.isStandardStart)) continue;
+      let at = node;
+      if (open) {
+        const f = node.fen.split(' ');
+        f[5] = String(t.num);
+        if (t.side) f[1] = t.side[0];
+        at = { fen: f.join(' ') };
+      }
+      const uci = positionOf(at.fen) && playable(at, t);
+      const score = uci ? followOn(at, uci, ahead) : -1;
+      if (score >= need(tree) && score > best) (best = score), (chosen = { node, uci, tree, fen: open ? at.fen : null });
     }
     return chosen && { ...chosen, score: best, tied: chosen.tree ? 1 : tied };
   }
@@ -857,6 +898,9 @@ export class MoveTracker {
   }
 }
 
+// Two figurines as an OCR reads them, most often (see BookMoves.pieceOf).
+const OCR_FIGURINES = { W: 'Q', '&': 'K' };
+
 /**
  * Follows the moves of a book, unit by unit — its pages or chapters, in reading order, { text, moves, diagrams }
  * (text.js; diagrams: [{ at (its place in the text), placement (FEN, or null when it was not read), side, font (set in a
@@ -875,12 +919,14 @@ export class BookMoves {
 
   /**
    * The piece a lost figurine's glyph is, once the book's moves have shown it clearly (twice, and twice as often as
-   * any other, and seven times in ten) — never "�", the character for any glyph a font or an OCR could not tell.
+   * any other, and seven times in ten) — never "�", the character for any glyph a font or an OCR could not tell —;
+   * until then, what an OCR reads two of the usual figurines as: the queen's crown a W, the king an & (Inside the
+   * Chess Mind's: +10 moves placed there, +8 in Kotov, no book fewer).
    */
   pieceOf(glyph) {
     const seen = [...(this.glyphs.get(glyph) || new Map())].sort((a, b) => b[1] - a[1]);
     const all = seen.reduce((n, [, k]) => n + k, 0);
-    return glyph !== '\uFFFD' && seen[0] && seen[0][1] >= 2 && seen[0][1] >= 2 * (seen[1]?.[1] || 0) && seen[0][1] >= all * 0.7 ? seen[0][0] : null;
+    return glyph !== '\uFFFD' && seen[0] && seen[0][1] >= 2 && seen[0][1] >= 2 * (seen[1]?.[1] || 0) && seen[0][1] >= all * 0.7 ? seen[0][0] : OCR_FIGURINES[glyph] || null;
   }
 
   /** A lost figurine's move was played where only one piece could make it: that piece is what the glyph stands for. */
@@ -925,7 +971,11 @@ export class BookMoves {
       // reading of the book's pieces, see diagrams.js readBoards)
       dg.known = r?.known && !dg.font ? r.node.fen.split(' ')[0] : null;
       // (its number: by its corner, as the page has it, else in the text around it)
-      if (dg.node) for (const label of dg.label ? [dg.label] : labelsOf(before, unit.text.slice(dg.at, dg.at + 60))) this.labels.set(label, this.labels.has(label) ? null : dg);
+      if (dg.node)
+        for (const label of dg.label ? [dg.label] : labelsOf(before, unit.text.slice(dg.at, dg.at + 60))) {
+          this.labels.set(label, this.labels.has(label) ? null : dg);
+          dg.tree.labelled = true;
+        }
     };
     for (const [i, t] of unit.moves.entries()) {
       while (d < diagrams.length && diagrams[d].at <= t.start) diagram(diagrams[d++]);
@@ -959,10 +1009,10 @@ export class BookMoves {
       if (t.glyph && t.node?.parent) this.learn(t);
       t.shown = !!r?.shown;
       t.restated = !!r?.restated;
-      // (a move read by OCR or written in descriptive notation: said as the move that was played — or, in descriptive
-      // notation, as written when none was: followed again, a move may lose its position; a move spelled out is said
-      // as it is written)
-      if ((t.ocr || t.desc || t.spelled) && t.node?.san) {
+      // (a move read by OCR, one with readings of its own — "Bxc3" played as bxc3 — or one written in descriptive
+      // notation: said as the move that was played — or, in descriptive notation, as written when none was: followed
+      // again, a move may lose its position; a move spelled out is said as it is written)
+      if ((t.ocr || t.sans || t.desc || t.spelled) && t.node?.san) {
         t.san = t.node.san.replace(/[+#]$/, '');
         t.check = /[+#]$/.exec(t.node.san)?.[0] || '';
         if (!t.spelled) t.words = spokenMove(t);

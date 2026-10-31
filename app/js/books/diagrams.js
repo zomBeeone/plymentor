@@ -348,8 +348,8 @@ function hatchedInk(ink, n) {
  * The square's background — white, or hatched for a dark square — is everything reachable from the square's sides
  * between the ink; thin strokes left over (hatching, outlines) are taken off by opening, then the shape is filled. (A
  * piece whose outline is broken on a dark square comes out smaller: the book's other pieces of its kind make up for it.)
- * On a plain square (`wall`: a grey a little darker than the square's own), a piece's outline lighter than the ink — a
- * small picture's thin grey lines — keeps the background out too.
+ * With `wall` (a grey darker than the square's own, or than the paper between its hatching), a piece's outline lighter
+ * than the ink — a small picture's thin grey lines — keeps the background out too.
  */
 export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false, wall = 0 } = {}) {
   const inset = Math.max(1, Math.round(size * 0.04));
@@ -376,7 +376,7 @@ export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false, wa
   // the background: reachable from the sides through light pixels (the ink grown by a pixel first, closing gaps in a
   // piece's outline — not on a square hatched in ink: that would close the hatching's gaps too)
   const walls = crisp ? dark : morph(dark, n, n, 1, true);
-  if (lines && !crisp) for (let i = 0; i < walls.length; i++) walls[i] |= lines[i];
+  if (lines) for (let i = 0; i < walls.length; i++) walls[i] |= lines[i];
   const reach = new Uint8Array(n * n);
   const stack = [];
   for (let i = 0; i < n; i++) for (const p of [i, (n - 1) * n + i, i * n, i * n + n - 1]) if (!walls[p] && !reach[p]) (reach[p] = 1), stack.push(p);
@@ -1213,9 +1213,9 @@ export function findBoards(img, { minSize = Math.round(Math.min(img.width, img.h
  * the picture's tone, blurred, changes along each of them, across the whole board; then its 64 squares must be light
  * and dark in turn. Returns a board as findBoards gives them (with `hatched`, and `side` when the picture marks the
  * side to move beside it: markBeside), or null when the picture shows none (`why(reason)` hears why: for tests and
- * tools).
+ * tools). `hatchWall`: an ebook's picture, not a scan (see wallOf).
  */
-export function findPictureBoard(img, { why = () => {} } = {}) {
+export function findPictureBoard(img, { why = () => {}, hatchWall = false } = {}) {
   const { width: W, height: H, data } = img;
   const m = Math.min(W, H);
   if (m < 96 || Math.max(W, H) > m * 1.6) return why('size'), null;
@@ -1350,8 +1350,11 @@ export function findPictureBoard(img, { why = () => {} } = {}) {
   // than the square
   const inkOn = tone => Math.min(150, Math.round(255 * (1 - tone) * 0.7));
   const darkInk = hatched ? 150 : inkOn(darkTone);
-  // (and on a board of plain squares — a book's own picture, not a scan's hatching — a piece's outline is darker than
-  // its square's own grey: the grey along the squares' tops, less a margin as wide as the grey varies there)
+  // (and a piece's outline is darker than its square's own grey: on a board of plain squares — a book's own picture,
+  // not a scan — the grey along the squares' tops less a margin as wide as the grey varies there; on hatched dark
+  // squares (of an ebook's picture: see darkWall), much darker than the paper between the strokes —
+  // the grey a tenth of the pixels there are lighter than, less 78 —, so that a white piece's grey outline keeps the
+  // background out, and the strokes leave paths between them)
   const wallOf = onDark => {
     const greys = new Uint32Array(256);
     let count = 0;
@@ -1367,10 +1370,13 @@ export function findPictureBoard(img, { why = () => {} } = {}) {
       for (let v = 0, k = 0; v < 256; v++) if ((k += greys[v]) >= count * q) return v;
       return 255;
     };
-    return count ? at(0.5) - Math.max(16, 4 * (at(0.5) - at(0.25))) : 0;
+    if (!count) return 0;
+    return hatched ? at(0.9) - 78 : at(0.5) - Math.max(16, 4 * (at(0.5) - at(0.25)));
   };
   const lightWall = hatched ? 0 : wallOf(false);
-  const darkWall = hatched ? 0 : wallOf(true);
+  // (hatched ones an ebook's picture's only: on scans more boards came out a game cannot have — Kotov's 10 → 17%, and
+  // Winning Chess Strategies' where its squares are small, as Inside the Chess Mind's, whose moves it did not help)
+  const darkWall = !hatched || hatchWall ? wallOf(true) : 0;
   // the board's own grid: its seven lines inside (between light and dark squares all along, never at the picture's
   // edge), the comb's size and start refined on them
   const [x, fx] = refine(ex, bx.offset + found.c0 * sx, sx);

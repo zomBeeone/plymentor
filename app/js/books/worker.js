@@ -12,7 +12,8 @@ self.onmessage = e => {
       const boards = found.map(b => ({ x: b.x, y: b.y, width: b.width, height: b.height, board: packBoard(b) }));
       self.postMessage({ id, boards });
     } else if (op === 'picture') {
-      const b = findPictureBoard(grayFrom(new Uint8Array(e.data.rgba), e.data.width, e.data.height));
+      // (an ebook's picture: its hatching drawn, not scanned — see diagrams.js wallOf)
+      const b = findPictureBoard(grayFrom(new Uint8Array(e.data.rgba), e.data.width, e.data.height), { hatchWall: true });
       self.postMessage({ id, board: b ? packBoard(b) : null });
     } else if (op === 'read') {
       const boards = e.data.boards.map(unpackBoard);

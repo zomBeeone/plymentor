@@ -22,12 +22,20 @@ export function glyphShape(square, classification) {
   };
 }
 
+/** A FEN's piece placement with the pieces on `squares` (names: "h1") left out. */
+function without(placement, squares) {
+  if (!squares?.length) return placement;
+  const rows = placement.split('/').map(r => [...r.replace(/\d/g, d => '.'.repeat(Number(d)))]);
+  for (const sq of squares) if (rows[8 - Number(sq[1])]) rows[8 - Number(sq[1])]['abcdefgh'.indexOf(sq[0])] = '.';
+  return rows.map(r => r.join('').replace(/\.+/g, m => String(m.length))).join('/');
+}
+
 function cgConfig(p) {
   const pos = tryPos(p.fen);
   const turn = turnOf(p.fen);
   const canMove = !!pos && !p.viewOnly && !!p.movable && (p.movable === 'both' || p.movable === turn);
   return {
-    fen: String(p.fen).split(' ')[0],
+    fen: without(String(p.fen).split(' ')[0], p.hide),
     orientation: p.orientation || 'white',
     turnColor: turn,
     lastMove: p.lastMove && p.lastMove.length === 2 ? p.lastMove : undefined,
@@ -46,7 +54,8 @@ function cgConfig(p) {
 
 /**
  * props: fen, orientation, lastMove [orig, dest], movable ('both'|'white'|'black'|false), onMove(uci),
- *        shapes (auto shapes), highlights { square: class }, viewOnly, banner, onClick
+ *        shapes (auto shapes), highlights { square: class }, viewOnly, banner, onClick, hide (squares whose pieces
+ *        are not shown — the position keeps them: a king the Book reader put in where a book's diagram has none)
  */
 export function Board(props) {
   const el = useRef();
@@ -119,7 +128,7 @@ export function Board(props) {
       lastOrientation.current = props.orientation;
       resyncSoon(); // a new orientation rebuilds the board (see resyncSoon)
     }
-  }, [props.fen, props.orientation, props.lastMove?.join(), props.movable, props.viewOnly, JSON.stringify(props.shapes || []), JSON.stringify(props.highlights || {})]);
+  }, [props.fen, props.orientation, props.lastMove?.join(), props.movable, props.viewOnly, JSON.stringify(props.shapes || []), JSON.stringify(props.highlights || {}), (props.hide || []).join()]);
 
   const choose = role => {
     const p = propsRef.current;

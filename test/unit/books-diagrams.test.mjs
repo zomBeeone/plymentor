@@ -6,7 +6,7 @@ import { fontBoards, findBoards, findPictureBoard, findFigureBoards, grayFrom, p
 import { pageText, pictureBoxes, diagramShaped } from '../../app/js/books/pdf.js';
 import { ocrText } from '../../app/js/books/ocr.js';
 import { findMoves, findSentences, spokenParts } from '../../app/js/books/text.js';
-import { BookMoves, sideMarked } from '../../app/js/books/moves.js';
+import { BookMoves, sideMarked, hiddenSquares } from '../../app/js/books/moves.js';
 import { posFromFen } from '../../app/js/chess.js';
 import { drawBoard, drawPlainBoard, drawCoordinates, drawText, drawMark, shrink, blankPage, pieceSquares } from './diagram-picture.mjs';
 
@@ -584,6 +584,12 @@ test('a diagram that leaves out a king (a puzzle book’s, a beginner’s book�
   assert.equal(d.node.fen.split(' ')[0].replace('K', '1').replace(/\d+/g, n => '1'.repeat([...n].reduce((s, c) => s + Number(c), 0))), '7k/5p1p/5PpQ/8/8/8/8/8'.replace(/\d+/g, n => '1'.repeat(Number(n))));
   assert.ok(!posFromFen(d.node.fen.replace(' w ', ' b ')).isCheck());
   assert.ok(posFromFen(u.moves[0].node.fen).isCheckmate());
+  // (the board does not show it — the book's diagram has none —, before the moves and after them)
+  const hidden = hiddenSquares(d.tree, d.node.fen);
+  assert.equal(hidden.length, 1);
+  assert.deepEqual(hiddenSquares(u.moves[0].tree, u.moves[0].node.fen), hidden);
+  // (a king no longer on that square — moved by the book's moves — shows)
+  assert.deepEqual(hiddenSquares(u.moves[0].tree, '7k/8/8/8/8/8/8/8 w - - 0 1'), []);
   // a beginner's book: no king at all — the rook's move played
   u = follow(new BookMoves(), 'The rook moves along files and ranks:\n\n1.Ra8', [{ at: 39, placement: '8/8/8/8/8/8/8/R7', font: true }]);
   assert.ok(u.diagrams[0].node && /K/.test(u.diagrams[0].node.fen) && /k/.test(u.diagrams[0].node.fen));
@@ -631,4 +637,61 @@ test('a scan of two pages side by side, each in two columns — notes beginning 
   const lines = [0, 1, 2, 3, 4, 5].map(i => ocrLine(100 + i * 30, ...xs.map(([a, b], k) => [a, b, columns[k][i]])));
   const page = ocrText({ blocks: [{ paragraphs: [{ lines }] }] }, { width: 1600, height: 1200 });
   assert.equal(page.text.replace(/\n+/g, '\n'), columns.flat().join('\n'));
+});
+
+test('an ebook’s small hatched picture: its white pieces’ grey outlines keep the hatching out', () => {
+  const examples = pieceSquares(64).map(p => pieceExample(p.type, p.img));
+  const fens = ['2r3k1/5ppp/8/8/8/1P2B3/P4PPP/2R3K1', '6k1/5ppp/8/3B4/8/1P6/P4PPP/2R3K1', '4k3/8/8/8/8/8/3PP3/4K3'];
+  // drawn three times larger and shrunk: squares of 30 pixels, strokes and outlines a pixel wide (grey where they fall
+  // between pixels)
+  const boards = fens.map(fen => {
+    const big = blankPage(90 * 8 + 64, 90 * 8 + 64);
+    drawBoard(big, 32, 32, 90, fen, { period: 10, hatch: 3, stroke: 3 });
+    return unpackBoard(JSON.parse(JSON.stringify(packBoard(findPictureBoard(shrink(big, 3), { hatchWall: true })))));
+  });
+  readBoards(boards, { examples });
+  assert.deepEqual(boards.map(placement), fens);
+});
+
+test('a scan’s text: a b-pawn’s capture written as a bishop’s, an exclamation mark read as an l — played as the position has them', () => {
+  const text = '1.d4 Nf6 2.c4 e6 3.Nc3 Bb4 4.e3 Bxc3+ 5.Bxc3 d5 6.cxd5l exd5';
+  const u = { text, moves: findMoves(text, { ocr: true }), diagrams: [] };
+  u.sentences = findSentences(text, u.moves);
+  new BookMoves().follow(u);
+  assert.deepEqual(
+    u.moves.map(m => `${m.san}${m.node ? '' : '✗'}`),
+    ['d4', 'Nf6', 'c4', 'e6', 'Nc3', 'Bb4', 'e3', 'Bxc3', 'bxc3', 'd5', 'cxd5', 'exd5'],
+  );
+  // (said as played)
+  assert.equal(u.moves[8].words, '5. b takes c3');
+});
+
+test('exercises, their answers pages later: each answer on the diagram where its moves go on, its move number from them', () => {
+  const book = new BookMoves();
+  // two exercises (their numbers drawn, not text; no move after them on their page: their move numbers guesses)
+  const ex = follow(book, 'Exercises\n\nWhat is going on?\n', [
+    { at: 11, placement: '6k1/5ppp/8/8/8/8/5PPP/3R2K1', side: 'w', font: true },
+    { at: 11, placement: 'r5k1/5ppp/8/8/8/8/5PPP/6K1', side: 'b', font: true },
+  ]);
+  const u = follow(book, 'Answers\n\n1. The rook comes to the seventh: 25. Rd7 h6 26. Rd8+ Kh7.\n\n2. Black takes the second rank: 31... Ra2 32. h3 Ra1+ 33. Kh2.');
+  assert.deepEqual([u.moves[0].node.parent, u.moves[4].node.parent], ex.diagrams.map(d => d.node));
+  assert.deepEqual(ex.diagrams.map(d => d.node.fen.split(' ')[5]), ['25', '31']);
+  assert.ok(u.moves.every(m => m.node && !m.shown));
+});
+
+test('an OCR’s figurines: its W a queen, its & a king, until the book’s moves show otherwise', () => {
+  // (a queen and a knight can both go to h5, nothing after it tells which: the W's queen)
+  let u = follow(new BookMoves(), 'Position:\n\n1.Wh5 Kd7', [{ at: 11, placement: '4k3/8/8/8/5N2/8/8/3QK3', side: 'w', font: true }]);
+  assert.equal(u.moves[0].node?.san, 'Qh5+');
+  // (the king and a rook can both go to f1)
+  u = follow(new BookMoves(), 'Position:\n\n1.&f1 Kd7', [{ at: 11, placement: '4k3/8/8/8/8/8/8/4K2R', side: 'w', font: true }]);
+  assert.equal(u.moves[0].node?.san, 'Kf1');
+});
+
+test('a picture’s unsure square read otherwise when more of the moves after it can be played then', () => {
+  // a white rook on f1 read as a knight (a rook its next likeliest piece): 1. h3 h6 can be played as read, 2. Re1
+  // only with the rook
+  const u = follow(new BookMoves(), 'Later:\n\n1. h3 h6 2. Re1 Kh7', [{ at: 8, placement: '6k1/5ppp/8/8/8/8/5PPP/5NK1', alts: [{ sq: 61, options: ['N', 'R'] }] }]);
+  assert.equal(u.diagrams[0].node.fen.split(' ')[0], '6k1/5ppp/8/8/8/8/5PPP/5RK1');
+  assert.ok(u.moves.every(m => m.node));
 });

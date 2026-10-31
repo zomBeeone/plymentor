@@ -95,6 +95,9 @@ function strictMoves(text) {
       num,
       side,
       san,
+      // (a b-pawn's capture written with a capital — "7. Bxc3" for 7.bxc3, as a scan's text may have it —: the
+      // bishop's move first, the pawn's where the bishop has none)
+      ...(/^Bx[ac][1-8]$/.test(san) ? { sans: [san, `b${san.slice(1)}`] } : {}),
       check: g.check === 'm' ? '#' : g.check || '',
       pawn: /^[a-h]/.test(san) && !/-/.test(san),
       square: /^[a-h][1-8]$/.test(san) && /^(?:-|\s)square/i.test(after),
@@ -118,8 +121,9 @@ const RANK_LIKE = { l: '1', i: '1', I: '1', '|': '1', z: '2', Z: '2', a: '4', d:
 const FILE_LIKE = { '£': 'f', '{': 'f', '¢': 'ce', '€': 'e' };
 const R = '[1-8lizZadgqAsSbéGTB&|]';
 const F = '[a-h£{¢€]';
+// (an exclamation mark read as l or I: "23. Rc1l")
 const OCR_MOVE = new RegExp(
-  `(?<![\\p{L}\\p{N}.\\-–])(?:(?<num>\\d{1,3})(?<dots>\\s?(?:\\.\\s?){1,4}|\\s)|(?<bdots>\\.{2,3}|…)\\s?)?(?<tok>[KQRBN]?${F}${R}[-–:x×X]${F}${R}|[KQRBN]?${F}?${R}?[x:×X]?${F}${R}|[O0]-[O0](?:-[O0])?[O0]?|(?<pf>[a-h])(?<pt>[a-h]))(?<chk>[+†‡#t]?)(?![\\p{L}\\p{N}]|[-–][a-h])`,
+  `(?<![\\p{L}\\p{N}.\\-–])(?:(?<num>\\d{1,3})(?<dots>\\s?(?:\\.\\s?){1,4}|\\s)|(?<bdots>\\.{2,3}|…)\\s?)?(?<tok>[KQRBN]?${F}${R}[-–:x×X]${F}${R}|[KQRBN]?${F}?${R}?[x:×X]?${F}${R}|[O0]-[O0](?:-[O0])?[O0]?|(?<pf>[a-h])(?<pt>[a-h]))(?<chk>[+†‡#t]?)(?:[lI](?=[\\s,;)]|$))?(?![\\p{L}\\p{N}]|[-–][a-h])`,
   'gu',
 );
 const OCR_WORDS = new Set(['as', 'ad', 'ha', 'hi', 'Bag', 'Bad', 'Bed', 'Red', 'Rad', 'fixed', 'fixes']); // (said as words unless among moves)

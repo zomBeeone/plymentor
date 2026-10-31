@@ -22,6 +22,7 @@ import { Tree, placeCoachPosition } from '../tree.js';
 import { INITIAL_FEN } from '../chess.js';
 import { listBooks, addBook, removeBook, getBook, saveBook, coverUrl } from '../books/library.js';
 import { openBook, Reading } from '../books/reader.js';
+import { hiddenSquares } from '../books/moves.js';
 import { PdfPage, EpubPage, ZOOM } from '../books/page.js';
 
 const SPEEDS = [1, 1.25, 1.5, 2];
@@ -324,6 +325,8 @@ function Reader({ id }) {
     let from = v?.node;
     if (!v?.own) {
       tree = v ? Tree.fromMoves(v.tree.startFen, v.tree.ucis(v.node)) : new Tree();
+      // (a king the reader put in where the book's diagram has none stays unseen)
+      if (v?.tree.hidden) tree.hidden = v.tree.hidden;
       from = tree.mainline().at(-1);
     }
     const added = tree.addMove(from, uci);
@@ -509,7 +512,7 @@ function Reader({ id }) {
           />`
         : html`<div class="board-area">
             ${s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${engineOn ? live?.lines?.[0]?.score || null : null} orientation=${orientation} />`}
-            <${Board} fen=${node?.fen || INITIAL_FEN} lastMove=${node?.uci ? [node.uci.slice(0, 2), node.uci.slice(2, 4)] : null} orientation=${orientation} movable="both" onMove=${play} shapes=${shapes} />
+            <${Board} fen=${node?.fen || INITIAL_FEN} hide=${hiddenSquares(view?.tree, node?.fen)} lastMove=${node?.uci ? [node.uci.slice(0, 2), node.uci.slice(2, 4)] : null} orientation=${orientation} movable="both" onMove=${play} shapes=${shapes} />
           </div>`}
       <div class="book-controls">
         <button class="btn icon" title="Previous sentence (←)" disabled=${!r} onClick=${() => r.step(-1)}>⏮</button>
