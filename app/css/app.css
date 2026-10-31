@@ -570,6 +570,7 @@ body.start-page { overflow: auto; min-height: 100%; display: flex; align-items: 
 .book-title { color: var(--strong); font-weight: 600; font-size: 15px; }
 .book-chapters { max-width: 260px; }
 .book-where { font-size: 12.5px; min-width: 96px; text-align: center; }
+.book-where input.book-page-no { width: 50px; padding: 3px 4px; margin: 0 3px; text-align: center; font-variant-numeric: tabular-nums; }
 .book-page { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; border-radius: var(--radius); background: #2b2926; border: 1px solid #2f2c29; display: flex; align-items: center; justify-content: center; }
 .book-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; width: calc(var(--board-size) + 26px); } /* (the board and its evaluation bar) */
 .book-side .panel.grow { flex: 1 1 0; min-height: 90px; }

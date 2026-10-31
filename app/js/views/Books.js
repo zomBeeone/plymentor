@@ -2,8 +2,9 @@
 // the board on the other: the sentence being read and the moves are marked on the page, and the board plays each
 // move as the reading gets to it, and shows each diagram's position — with Stockfish's evaluation, lines and best move
 // (the Book reader's own switch). A click on the page reads from there (or shows a move or a diagram); the student may
-// play moves of their own on the board (the reading pauses; going on, the book's next move brings its position back);
-// scanned books are read by OCR; the books stay on the student's computer (books/library.js).
+// play moves of their own on the board, or go back and on through the board's moves (the reading pauses; going on, the
+// book's next move brings its position back), and go to a page by its number; scanned books are read by OCR; the books
+// stay on the student's computer (books/library.js).
 import { html, useEffect, useRef, useState } from '../../vendor/preact.js';
 import { toast, useStore } from '../store.js';
 import { navigate } from '../router.js';
@@ -26,6 +27,26 @@ import { hiddenSquares } from '../books/moves.js';
 import { PdfPage, EpubPage, ZOOM } from '../books/page.js';
 
 const SPEEDS = [1, 1.25, 1.5, 2];
+
+/** Whether move `a` is `b` or comes before it on its line. */
+function leadsTo(a, b) {
+  for (let n = b; n; n = n.parent) if (n === a) return true;
+  return false;
+}
+
+/**
+ * Where the board's line goes on from: the furthest move it was at on the line through `node` (a move the student went
+ * back from, `view.end`, or the board's own), so that going on again goes the way it came — along a variation too.
+ */
+const endOf = (node, view) => [view?.end, view?.node].find(e => e && leadsTo(node, e)) || node;
+
+/** The move after `node`: towards `end`, else its line's next move. */
+function nextOf(node, end) {
+  if (end === node || !leadsTo(node, end)) return node.children[0] || null;
+  let n = end;
+  while (n.parent !== node) n = n.parent;
+  return n;
+}
 
 export function Books({ route }) {
   // (the coach does not talk in the Book reader: what it was saying stops — voice.js says nothing new here)
@@ -103,8 +124,9 @@ function Library() {
       <p class="muted" style="margin:6px 0 16px">
         Add a chess book — a PDF or an EPUB — and Plymentor reads it to you with your coach's voice: the sentence it reads is marked on the page, the moves are marked
         too, and the board plays each move as the reading gets to it and shows the book's diagrams. Click a sentence to read from there, or a move or a diagram to see it on
-        the board. Try moves of your own on the board too: the reading pauses, and once it goes on, the board comes back to the book with its next move. Scanned books are
-        read too (their text is recognised on this computer, which takes a while). Your books stay on this computer.
+        the board. Try moves of your own on the board too, or go back and on through the moves with ← and →: the reading pauses, and once it goes on, the board comes
+        back to the book with its next move. Type a page's number to go straight to it. Scanned books are read too (their text is recognised on this computer, which
+        takes a while). Your books stay on this computer.
       </p>
       ${books && !books.length
         ? html`<div class="card book-drop">
@@ -134,9 +156,11 @@ function Reader({ id }) {
   const rerender = useForce();
   const [opened, setOpened] = useState({ book: null, error: null });
   const [orientation, setOrientation] = useState('white');
-  // a position of the move list the student clicked, or the coach showed: { tree, node } — or the student's own moves
-  // (own: true), on a tree of their own
+  // a position of the move list the student went to, or the coach showed: { tree, node, end } — or the student's own
+  // moves (own: true), on a tree of their own
   const [browse, setBrowse] = useState(null);
+  const [pageText, setPageText] = useState(null); // (a page number being typed)
+  const pageNo = useRef();
   // a PDF page: whole ('page'), as wide as the panel ('width'), or a share of the panel's width (a number, in %)
   const [zoom, setZoom] = useState(() => stored('books.zoom', 'page'));
   // a diagram the student sets right on the board editor: { diagram, placement, side }
@@ -289,6 +313,15 @@ function Reader({ id }) {
     if (u < 0 || u >= r.book.count) return;
     goTo({ unit: u, sentence: dir < 0 && r.book.format === 'epub' ? Math.max(0, (r.book.units[u]?.sentences.length || 1) - 1) : 0 }, true);
   };
+  /** A page the student typed the number of (a PDF's): read from its start, as a page turned to. */
+  const goToPage = text => {
+    setPageText(null);
+    const r = reading.current;
+    const n = Number.parseInt(text, 10);
+    if (!r || !Number.isFinite(n)) return;
+    const u = Math.max(1, Math.min(r.book.count, n)) - 1;
+    if (u !== r.at.unit) goTo({ unit: u, sentence: 0 }, true);
+  };
   /** A PDF page's zoom: 'page', 'width', or a share of the panel's width in % (kept for the next time). */
   const zoomTo = z => {
     if (typeof z === 'number') z = Math.max(ZOOM.min, Math.min(ZOOM.max, Math.round(z)));
@@ -314,6 +347,34 @@ function Reader({ id }) {
     }
     r.toggle();
   };
+  /** The reading pauses while the student looks at the board (the part it stopped in is made again, for ▶). */
+  const hold = () => {
+    const r = reading.current;
+    if (!r?.playing) return;
+    r.pause();
+    r.warm();
+  };
+  /**
+   * The board one move back or on (dir -1 or 1) — on the book's line or the student's own moves —: the reading pauses;
+   * ▶ goes on from where it stopped, and the book's next move brings its position back.
+   */
+  const stepMove = dir => {
+    const v = viewRef.current;
+    if (!v) return;
+    const end = endOf(v.node, v);
+    const to = dir < 0 ? v.node.parent : nextOf(v.node, end);
+    if (!to) return;
+    hold();
+    if (dir > 0) moveSound(to);
+    setBrowse({ tree: v.tree, node: to, own: !!v.own, end });
+  };
+  /** A move of the move list the student clicked: the board shows it, the reading pauses. */
+  const select = n => {
+    const v = viewRef.current;
+    if (!v) return;
+    hold();
+    setBrowse({ tree: v.tree, node: n, own: !!v.own, end: endOf(n, v) });
+  };
   /**
    * A move the student plays on the board: the reading pauses, and the move goes on a line of the student's own — the
    * moves that led to the board's position, then theirs (the book's trees stay as the book has them). ▶ goes on
@@ -332,11 +393,7 @@ function Reader({ id }) {
     const added = tree.addMove(from, uci);
     if (!added) return;
     moveSound(added.node);
-    const r = reading.current;
-    if (r?.playing) {
-      r.pause();
-      r.warm(); // (the part it stopped in is made again, for ▶)
-    }
+    hold();
     setBrowse({ tree, node: added.node, own: true });
   };
 
@@ -403,10 +460,14 @@ function Reader({ id }) {
       const r = reading.current;
       if (!r) return;
       if (e.key === ' ') toggle();
-      else if (e.key === 'ArrowRight') r.step(1);
-      else if (e.key === 'ArrowLeft') r.step(-1);
-      else if (e.key === 'PageDown') turn(1);
+      else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        // (the board's moves, as on the app's other boards; with Shift, the sentences)
+        const dir = e.key === 'ArrowRight' ? 1 : -1;
+        if (e.shiftKey) r.step(dir);
+        else stepMove(dir);
+      } else if (e.key === 'PageDown') turn(1);
       else if (e.key === 'PageUp') turn(-1);
+      else if (e.key === 'g' && r.book.format === 'pdf') pageNo.current?.focus();
       else if (e.key === 'f') setOrientation(o => (o === 'white' ? 'black' : 'white'));
       else if ((e.key === '+' || e.key === '=' || e.key === '-') && r.book.format === 'pdf') zoomBy(e.key === '-' ? -1 : 1);
       else return;
@@ -440,6 +501,8 @@ function Reader({ id }) {
   viewRef.current = view;
   const node = view?.node;
   const own = !!browse?.own; // (the student's own moves on the board)
+  const away = !!browse; // (the board shows another position than the reading's)
+  const next = node ? nextOf(node, endOf(node, view)) : null;
   // (the diagram whose position the board shows: one the student may set right)
   const diagramShown = !browse && move?.kind === 'diagram' && move.node === node ? move : null;
   const best = engineOn && live?.lines?.[0]?.pv?.[0];
@@ -447,11 +510,8 @@ function Reader({ id }) {
   const scanning = book?.scanning;
   const loading = book && book.loaded < book.count && !scanning;
   const zoomPct = typeof zoom === 'number' ? zoom : p?.percent || 100;
-  const whereLabel = !book
-    ? ''
-    : book.format === 'pdf'
-      ? `Page ${at.unit + 1} of ${book.count}`
-      : `${p?.pages > 1 ? `Page ${p.page + 1} of ${p.pages} · ` : ''}chapter ${at.unit + 1} of ${book.count}`;
+  // (an EPUB's place: a PDF's page is a box its number can be typed in)
+  const whereLabel = book ? `${p?.pages > 1 ? `Page ${p.page + 1} of ${p.pages} · ` : ''}chapter ${at.unit + 1} of ${book.count}` : '';
   const status = !book
     ? 'Opening the book…'
     : book.error && !unit
@@ -461,9 +521,9 @@ function Reader({ id }) {
       : unit && !unit.text.trim()
       ? 'This page has no text to read (a picture).'
       : r?.playing
-        ? `Reading · ${readingEngine(book.lang) === 'natural' ? 'natural voice' : 'system voice'}${own ? ' · the board goes back to the book with its next move' : ''}`
-        : own
-          ? 'Paused for your moves — ▶ Continue reads on; the board goes back to the book with its next move'
+        ? `Reading · ${readingEngine(book.lang) === 'natural' ? 'natural voice' : 'system voice'}${away ? ' · the board goes back to the book with its next move' : ''}`
+        : away
+          ? `Paused${own ? ' for your moves' : ''} — ▶ Continue reads on; the board goes back to the book with its next move`
           : 'Paused — press ▶ or Space to read';
 
   return html`<div class="book-reader">
@@ -494,7 +554,27 @@ function Reader({ id }) {
           <span class="muted book-zoom-pct">${zoomPct}%</span>
         </div>`}
         <button class="btn icon" title="Previous page (Page Up)" disabled=${!book} onClick=${() => turn(-1)}>◀</button>
-        <span class="muted nowrap book-where">${whereLabel}</span>
+        ${book?.format === 'pdf'
+          ? html`<label class="muted nowrap book-where" title="Go to a page: type its number, then Enter (g)">
+              Page
+              <input
+                ref=${pageNo}
+                class="book-page-no"
+                type="text"
+                inputmode="numeric"
+                aria-label="Page number"
+                value=${pageText ?? String(at.unit + 1)}
+                onFocus=${e => e.currentTarget.select()}
+                onInput=${e => setPageText(e.currentTarget.value)}
+                onKeyDown=${e => {
+                  if (e.key === 'Escape') e.currentTarget.value = String(at.unit + 1);
+                  if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur();
+                }}
+                onBlur=${e => goToPage(e.currentTarget.value)}
+              />
+              of ${book.count}
+            </label>`
+          : html`<span class="muted nowrap book-where">${whereLabel}</span>`}
         <button class="btn icon" title="Next page (Page Down)" disabled=${!book} onClick=${() => turn(1)}>▶</button>
       </div>
       <div class="book-page" ref=${pageEl}>${!book ? html`<div class="empty"><span class="spinner"></span></div>` : null}</div>
@@ -515,15 +595,19 @@ function Reader({ id }) {
             <${Board} fen=${node?.fen || INITIAL_FEN} hide=${hiddenSquares(view?.tree, node?.fen)} lastMove=${node?.uci ? [node.uci.slice(0, 2), node.uci.slice(2, 4)] : null} orientation=${orientation} movable="both" onMove=${play} shapes=${shapes} />
           </div>`}
       <div class="book-controls">
-        <button class="btn icon" title="Previous sentence (←)" disabled=${!r} onClick=${() => r.step(-1)}>⏮</button>
-        <button class=${cls('btn', 'primary', 'book-play')} title=${own && !r?.playing ? 'Go on reading (Space): your moves stay on the board until the book’s next move' : 'Read / pause (Space)'} disabled=${!r} onClick=${toggle}>${
-          r?.playing ? '⏸ Pause' : own ? '▶ Continue' : '▶ Read'
+        <button class="btn icon" title="Previous sentence (Shift + ←)" disabled=${!r} onClick=${() => r.step(-1)}>⏮</button>
+        <button class=${cls('btn', 'primary', 'book-play')} title=${away && !r?.playing ? 'Go on reading (Space): the board shows this position until the book’s next move' : 'Read / pause (Space)'} disabled=${!r} onClick=${toggle}>${
+          r?.playing ? '⏸ Pause' : away ? '▶ Continue' : '▶ Read'
         }</button>
-        <button class="btn icon" title="Next sentence (→)" disabled=${!r} onClick=${() => r.step(1)}>⏭</button>
+        <button class="btn icon" title="Next sentence (Shift + →)" disabled=${!r} onClick=${() => r.step(1)}>⏭</button>
         <div class="btn-group" title="Reading speed">
           ${SPEEDS.map(s => html`<button class=${cls('btn small', r?.speed === s && 'active')} disabled=${!r} onClick=${() => r.setSpeed(s)}>${s}×</button>`)}
         </div>
         <span class="spacer"></span>
+        <div class="btn-group book-moves">
+          <button class="btn icon" title="Previous move (←): the reading pauses" disabled=${!node?.parent || !!editing} onClick=${() => stepMove(-1)}>◀</button>
+          <button class="btn icon" title="Next move (→): the reading pauses" disabled=${!next || !!editing} onClick=${() => stepMove(1)}>▶</button>
+        </div>
         ${diagramShown &&
         !editing &&
         html`<button class="btn small" title="The diagram read wrong? Set its pieces right on the board: the book is followed again from it, and its other diagrams are read better" onClick=${() => edit(diagramShown)}>✎ Fix diagram</button>`}
@@ -551,7 +635,7 @@ function Reader({ id }) {
         <div class="panel-head"><span class="title">Moves</span><span class="spacer"></span>${browse && (move?.node || own) ? html`<button class="btn small ghost" onClick=${() => setBrowse(null)}>↩ Back to the reading</button>` : null}</div>
         <div class="panel-body">
           ${view
-            ? html`<${MoveList} tree=${view.tree} current=${view.node} onSelect=${n => setBrowse({ ...view, node: n })} />`
+            ? html`<${MoveList} tree=${view.tree} current=${view.node} onSelect=${select} />`
             : html`<div class="empty"><p class="muted">The moves of the book appear here as the reading gets to them.</p></div>`}
         </div>
       </div>

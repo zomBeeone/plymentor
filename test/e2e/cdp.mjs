@@ -230,6 +230,13 @@ export class Page {
       for (const type of ['keyDown', 'keyUp']) await this.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, ...(type === 'keyDown' ? { text: '\r' } : {}) });
   }
 
+  /** A real key press, no text typed: 'ArrowLeft', 'ArrowRight', … or a letter ('g'); with Shift held when `shift`. */
+  async press(key, { shift = false } = {}) {
+    const vk = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40 }[key] ?? key.toUpperCase().charCodeAt(0);
+    const code = key.length === 1 ? `Key${key.toUpperCase()}` : key;
+    for (const type of ['rawKeyDown', 'keyUp']) await this.send('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers: shift ? 8 : 0 });
+  }
+
   /** Puts files into a file input (as if chosen in the file dialog); the page gets its change event. */
   async setFiles(selector, files) {
     const { root } = await this.send('DOM.getDocument', { depth: -1, pierce: true });

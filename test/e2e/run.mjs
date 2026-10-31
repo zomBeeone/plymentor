@@ -434,7 +434,17 @@ async function main() {
     await page.waitFor(`window.ccSaid.includes('11. bishop takes f6')`, { timeout: 20000, what: 'the reading' });
     await page.waitFor(`/Bxf6|Nxf6|g5|Nd7|f5/.test(${active})`, { what: 'the board following the reading' });
     await page.waitFor(`window.ccSaid.includes('White wants the d5 square for a knight.')`, { what: 'a sentence with a square in it, said at once' });
-    await page.click('.book-play');
+    // ← while it reads: the reading pauses, the board one move back; → on again, ← back, the reading still waiting
+    await page.press('ArrowLeft');
+    await page.waitFor(`!document.querySelector('.book-play').innerText.includes('Pause')`, { what: 'the reading paused by ←' });
+    const back = JSON.stringify(await page.eval(active));
+    await page.press('ArrowRight');
+    await page.waitFor(`${active} !== ${back}`, { what: 'a move on (→)' });
+    await page.press('ArrowLeft');
+    await page.waitFor(`${active} === ${back}`, { what: 'a move back again (←)' });
+    const saidSoFar = await page.eval('window.ccSaid.length');
+    await sleep(600);
+    assert((await page.eval('window.ccSaid.length')) === saidSoFar && (await page.eval(`document.querySelector('.book-play').innerText`)).includes('Continue'), 'the reading waiting while the student goes through the moves');
     const said = await page.eval('window.ccSaid.slice(0, 6)');
     assert(JSON.stringify(said) === '["The Najdorf","Game 1","1. e4","c5","2. knight to f3","d6"]', `said: ${JSON.stringify(said)}`);
     // Stockfish on the reader's board: its evaluation bar and its lines (the Book reader's own switch)
@@ -451,6 +461,14 @@ async function main() {
     await page.waitFor(`${active} === 'b4' && document.querySelector('.book-play').innerText.includes('Continue')`, { what: 'the student’s move on the board, the reading paused' });
     await sleep(2000);
     assert((await page.eval('window.ccSaid.length')) === 1 && (await page.eval(active)) === 'b4', 'nothing more read, the student’s move still on the board');
+    // ← and → through the student's move and the book's before it, then on again to the student's move
+    await page.press('ArrowLeft');
+    await page.waitFor(`${active} === 'g5'`, { what: 'the book’s move before the student’s (←)' });
+    await page.press('ArrowLeft');
+    await page.waitFor(`${active} === 'Nxf6'`, { what: 'one more move back (←)' });
+    await page.press('ArrowRight');
+    await page.press('ArrowRight');
+    await page.waitFor(`${active} === 'b4' && document.querySelector('.book-play').innerText.includes('Continue')`, { what: 'on again to the student’s move (→ →)' });
     await page.click('.book-play');
     await page.waitFor(`window.ccSaid.length === 2`, { what: 'the reading going on' });
     assert((await page.eval(active)) === 'b4', 'the student’s move on the board until the book’s next move');
@@ -491,6 +509,8 @@ async function main() {
     await page.eval(`([...document.querySelectorAll('.bk-pdf .textLayer [data-s]')].find(e => e.textContent.includes('White wants')).click(), true)`);
     await page.waitFor(`/White wants/.test([...document.querySelectorAll('.bk-pdf .bk-cur')].map(e => e.textContent).join(''))`, { what: 'the sentence clicked' });
     await page.waitFor(`${active} === 'f5'`, { what: 'the position before it on the board' });
+    await page.press('ArrowRight', { shift: true });
+    await page.waitFor(`/Black can also consider/.test([...document.querySelectorAll('.bk-pdf .bk-cur')].map(e => e.textContent).join(''))`, { what: 'the next sentence (Shift + →)' });
     await page.click('.book-head button', 'Fit width');
     await page.waitFor(`document.querySelector('.book-page.bk-wide') && document.querySelector('.bk-sheet').offsetWidth > document.querySelector('.book-page').clientWidth * 0.9`, { what: 'the page as wide as the panel' });
     // a size of the student's (the slider: 150% of the panel's width, the page scrolling both ways), then the whole page
@@ -498,6 +518,11 @@ async function main() {
     await page.waitFor(`document.querySelector('.book-page.bk-zoom') && document.querySelector('.book-zoom-pct')?.textContent === '150%' && document.querySelector('.bk-sheet').offsetWidth > document.querySelector('.book-page').clientWidth * 1.3`, { what: 'the page at 150% of the panel’s width' });
     await page.click('.book-head button', 'Whole page');
     await page.waitFor(`!document.querySelector('.book-page.bk-zoom') && !document.querySelector('.book-page.bk-wide') && document.querySelector('.bk-sheet').offsetHeight <= document.querySelector('.book-page').clientHeight`, { what: 'the whole page again' });
+    // a page by its number: g puts the cursor in the page box, the number typed, then Enter
+    await page.press('g');
+    await page.waitFor(`document.activeElement?.classList.contains('book-page-no')`, { what: 'the page box (g)' });
+    await page.keyboard('3', { enter: true });
+    await page.waitFor(`document.querySelector('.book-page-no').value === '3' && document.activeElement !== document.querySelector('.book-page-no') && /An Old Game/.test(document.querySelector('.bk-pdf .textLayer')?.textContent || '')`, { timeout: 20000, what: 'page 3, gone to by its number' });
   });
 
   await step('book reader: a scanned PDF — its words read by OCR, its hatched diagrams found and read, the board showing them', async () => {
