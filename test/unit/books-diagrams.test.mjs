@@ -505,6 +505,19 @@ test('the positions known of some boards teach the book’s pieces: a rook drawn
   assert.deepEqual(taught.map(placement), fens);
 });
 
+test('a known position of another moment of its game teaches nothing where its picture plainly shows another piece: a pawn labelled a bishop', () => {
+  // a pawn on a hatched square come out a little like a bishop, on two boards: on one of them, the last known, the line
+  // read's position — some moves on from the picture's — has a white bishop there (no other white bishop known on a
+  // dark square to be unlike); the other is not known
+  const pawn = PIECES.p.map((v, i) => 0.75 * v + 0.25 * PIECES.b[i]);
+  const fens = ['4k3/pp1b1ppp/8/8/8/8/PP1B1PPP/4K3', '2b1k3/1pp2pp1/8/8/8/8/1PP2PP1/2B1K3', '4kb2/p1p2p1p/8/8/8/8/P1P2P1P/4KB2', '3bk3/pp4pp/8/8/8/8/PP4PP/3BK3'];
+  const boards = () => [...fens.map(f => squaresOf(f)), squaresOf('4k3/8/8/8/8/6P1/8/4K3', { shapes: { g3: pawn } }), squaresOf('4k3/8/8/8/8/8/1P6/4K3', { shapes: { b2: pawn } })];
+  const examples = pieceSquares(64).map(p => pieceExample(p.type, p.img));
+  const read = boards();
+  readBoards(read, { examples, labels: [...fens, '4k3/8/8/8/8/6B1/8/4K3', null] });
+  assert.equal(placement(read[5]), '4k3/8/8/8/8/8/1P6/4K3');
+});
+
 test('OCR: ¢ for e (or c), € for e — the board plays the reading that is legal', () => {
   const book = new BookMoves();
   const text = 'White has just played 2.e6.\n\n2...fx¢6 3.Kd1 €5';
@@ -686,6 +699,14 @@ test('an OCR’s figurines: its W a queen, its & a king, until the book’s move
   // (the king and a rook can both go to f1)
   u = follow(new BookMoves(), 'Position:\n\n1.&f1 Kd7', [{ at: 11, placement: '4k3/8/8/8/8/8/8/4K2R', side: 'w', font: true }]);
   assert.equal(u.moves[0].node?.san, 'Kf1');
+  // (a scan's commercial OCR: "l:t" its rook — a rook and a bishop can both go to d2)
+  u = follow(new BookMoves(), 'Position:\n\n1.l:td2 Kd7', [{ at: 11, placement: '4k3/8/8/8/5B2/8/8/3RK3', side: 'w', font: true }]);
+  assert.equal(u.moves[0].node?.san, 'Rd2');
+  // a glyph the book's moves showed three times as often as any other piece, half the times — from eight of them
+  const book = new BookMoves();
+  book.glyphs.set('Zz', new Map([['R', 9], ['N', 3], ['B', 3]]));
+  book.glyphs.set('Qq', new Map([['R', 6], ['N', 2], ['B', 2]]));
+  assert.deepEqual([book.pieceOf('Zz'), book.pieceOf('Qq')], ['R', null]);
 });
 
 test('a picture’s unsure square read otherwise when more of the moves after it can be played then', () => {

@@ -898,8 +898,16 @@ export class MoveTracker {
   }
 }
 
-// Two figurines as an OCR reads them, most often (see BookMoves.pieceOf).
-const OCR_FIGURINES = { W: 'Q', '&': 'K' };
+// The usual figurines as OCRs read them, most often (see BookMoves.pieceOf): the commercial OCR behind many scanned
+// books' text — each spelling the same piece wherever a book's own moves taught it (Inside the Chess Mind, Pump Up
+// Your Rating, Kotov, The Soviet Chess Primer) — and Tesseract's W and &.
+const OCR_FIGURINES = {
+  W: 'Q', "'ii'": 'Q', "'ii": 'Q', "'iW": 'Q', "'i": 'Q',
+  '&': 'K', "'it>": 'K', '<it>': 'K', "'it": 'K', "'itt": 'K', "'iit": 'K', '<t>': 'K', '<lt': 'K',
+  'l:t': 'R', 'l:.': 'R', "':": 'R', "':'": 'R', ":'": 'R', ':t': 'R', 'l:': 'R',
+  'i.': 'B', iL: 'B', 'i..': 'B', 'il.': 'B', 'ii.': 'B', 'J.': 'B', 'j.': 'B',
+  ttJ: 'N', liJ: 'N', ltJ: 'N', lLl: 'N', lD: 'N', tD: 'N', tiJ: 'N', tLl: 'N',
+};
 
 /**
  * Follows the moves of a book, unit by unit — its pages or chapters, in reading order, { text, moves, diagrams }
@@ -919,14 +927,19 @@ export class BookMoves {
 
   /**
    * The piece a lost figurine's glyph is, once the book's moves have shown it clearly (twice, and twice as often as
-   * any other, and seven times in ten) — never "�", the character for any glyph a font or an OCR could not tell —;
-   * until then, what an OCR reads two of the usual figurines as: the queen's crown a W, the king an & (Inside the
-   * Chess Mind's: +10 moves placed there, +8 in Kotov, no book fewer).
+   * any other, and seven times in ten; or, from eight moves or more, three times as often as any other and half the
+   * times — a scan's moves placed in wrong positions add noise: the 158-page Inside the Chess Mind's "l:t" was a
+   * rook 165 times in 179) — never "�", the character for any glyph a font or an OCR could not tell —; until then,
+   * what an OCR reads the usual figurines as (OCR_FIGURINES). With both, the 158-page Inside the Chess Mind +221 moves
+   * placed, Pump Up +150, The Soviet Chess Primer +83, Kotov +51, no book fewer.
    */
   pieceOf(glyph) {
     const seen = [...(this.glyphs.get(glyph) || new Map())].sort((a, b) => b[1] - a[1]);
     const all = seen.reduce((n, [, k]) => n + k, 0);
-    return glyph !== '\uFFFD' && seen[0] && seen[0][1] >= 2 && seen[0][1] >= 2 * (seen[1]?.[1] || 0) && seen[0][1] >= all * 0.7 ? seen[0][0] : OCR_FIGURINES[glyph] || null;
+    const top = seen[0]?.[1] || 0;
+    const next = seen[1]?.[1] || 0;
+    const clear = (top >= 2 && top >= 2 * next && top >= all * 0.7) || (top >= 8 && top >= 3 * next && top >= all * 0.5);
+    return glyph !== '\uFFFD' && clear ? seen[0][0] : OCR_FIGURINES[glyph] || null;
   }
 
   /** A lost figurine's move was played where only one piece could make it: that piece is what the glyph stands for. */

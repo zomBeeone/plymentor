@@ -161,9 +161,10 @@ class Book {
 // square's grey outlines keep its pieces whole.
 const PICTURES = 3;
 // The version of how a book's boards are read (diagrams.js readBoards): when it changes, the boards kept from before —
-// a scanned PDF's, an EPUB's pictures' — are read again (not looked for again). 3: four of the app's piece sets to start
-// from, the book's known positions teaching its pieces.
-const READING = 3;
+// a scanned PDF's, an EPUB's pictures' — are read again (not looked for again). 4 since a known position's squares that
+// plainly show another piece teach nothing (3: four of the app's piece sets to start from, the book's known positions
+// teaching its pieces).
+const READING = 4;
 
 /** The positions known of a book's boards, as readBoards takes them: what the student set, or what the reading found. */
 const labelOf = d => (d?.fixed ? d.placement : d?.known || null);

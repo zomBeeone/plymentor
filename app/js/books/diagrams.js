@@ -878,17 +878,34 @@ export function readBoards(boards, { examples = [], labels = [] } = {}) {
         const cell = b.cells[r][c];
         const p = sq[r * 8 + c];
         if (p === '.' || cell.shape.area < PIECE_MIN) continue;
-        const e = { type: p.toLowerCase(), white: p !== p.toLowerCase(), dark: cell.darkSquare, fill: cell.shape.fill, area: cell.shape.area, height: cell.shape.height, silhouette: cell.shape.silhouette, seed: true };
+        const e = { type: p.toLowerCase(), white: p !== p.toLowerCase(), dark: cell.darkSquare, fill: cell.shape.fill, area: cell.shape.area, height: cell.shape.height, silhouette: cell.shape.silhouette, seed: true, board: i };
         const key = `${p}${e.dark}`;
         taught.set(key, [...(taught.get(key) || []), e]);
       }
   });
   // (a known position may be a move off — the piece that took on a square labelling the one it took —: a labelled
   // square much less like the others of its piece than they are like each other teaches nothing)
+  const sound = [];
+  const refs = Object.fromEntries(TYPES.map(t => [t, []])); // (of each piece, the first twenty of a colour on a colour of square)
   for (const list of taught.values()) {
     const like = list.map(e => (list.length < 3 ? 1 : list.reduce((s, o) => s + (o === e ? 0 : dot((e.unit ||= unit(e.silhouette)), (o.unit ||= unit(o.silhouette)))), 0) / (list.length - 1)));
     const typical = [...like].sort((a, b) => a - b)[like.length >> 1];
-    list.forEach((e, k) => like[k] >= typical - 0.15 && known.push(e));
+    const alike = list.filter((e, k) => like[k] >= typical - 0.15);
+    sound.push(...alike);
+    refs[alike[0].type].push(...alike.slice(0, 20));
+  }
+  // (or another position of its game, some moves from the picture's — the line read went on from there —: a labelled
+  // square plainly more like the book's labelled squares of another piece than of its own, on other boards — the
+  // likest three of each piece, by 0.05 — teaches nothing either: a pawn come out a little like a bishop on a hatched
+  // square, labelled a bishop, would have the book's pawns read as bishops. Only plainly: a scan's knights and queens
+  // may be nearly alike — Inside the Chess Mind's —, and its labels teach them apart)
+  const likest = (e, list) => {
+    const v = list.filter(o => o.board !== e.board).map(o => dot((e.unit ||= unit(e.silhouette)), (o.unit ||= unit(o.silhouette)))).sort((a, b) => b - a);
+    return v.length >= 3 ? (v[0] + v[1] + v[2]) / 3 : null;
+  };
+  for (const e of sound) {
+    const own = likest(e, refs[e.type]);
+    if (own === null || !TYPES.some(t => t !== e.type && (likest(e, refs[t]) ?? -1) > own + 0.05)) known.push(e);
   }
   // a first example of each piece from the boards that look like the start of a game
   for (const b of boards) {
