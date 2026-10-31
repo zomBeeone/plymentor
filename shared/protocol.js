@@ -1,6 +1,6 @@
 // Constants shared by the app's window (app/) and its main process (desktop/).
 
-export const APP_VERSION = '1.0.4';
+export const APP_VERSION = '1.0.5';
 
 // Bumped whenever window <-> coach host messages change incompatibly.
 export const COACH_PROTOCOL = 2;
