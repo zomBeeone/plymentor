@@ -755,7 +755,8 @@ async function main() {
       // (removing the installer as the app starts, while it still runs, Windows refuses: the start must not stop there
       // and leave no window)
       await page.eval('(window.close(), true)');
-      assert((await app.waitForExit(20000)) === 0, 'Plymentor closed');
+      const code = await app.waitForExit(20000);
+      assert(code === 0, `Plymentor closed: exit code ${code}`);
       writeFileSync(join(HOME, 'update.json'), JSON.stringify({ auto: true, lastVersion: '0.9.0' }));
       const pending = join(HOME, 'update-cache', 'plymentor-updater', 'pending');
       const installer = join(pending, setupName(APP_VERSION));
