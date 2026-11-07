@@ -435,7 +435,8 @@ async function main() {
     assert(scroll.main === 0 && scroll.page === 0 && scroll.list > 0 && scroll.board > 0, `scrolling: ${JSON.stringify(scroll)}`);
     // back to the starting position, and into another line from there
     await page.click('.board-controls button', '⏮');
-    await page.waitFor(`!document.querySelector('.panel.moves .movelist .active') && /Starting position/.test(document.querySelector('.opening-name')?.innerText || '')`, { what: 'the starting position' });
+    // (and on chessground's board: it takes the position after the screen's render — clicked sooner, the move is lost)
+    await page.waitFor(`!document.querySelector('.panel.moves .movelist .active') && /Starting position/.test(document.querySelector('.opening-name')?.innerText || '') && [...document.querySelectorAll('.board-area cg-board piece')].some(p => p.cgKey === 'd2')`, { what: 'the starting position' });
     await page.clickSquare('.board-area .cg-wrap', 'd2');
     await page.clickSquare('.board-area .cg-wrap', 'd4');
     await page.waitFor(`document.querySelector('.panel.moves .movelist .active')?.textContent.includes('d4')`, { what: 'another line' });

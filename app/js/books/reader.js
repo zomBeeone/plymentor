@@ -157,9 +157,15 @@ class Book {
   }
 }
 
-// The version of what is kept of an EPUB's pictures: 3 since a picture's mark of the side to move is read, and a plain
-// square's grey outlines keep its pieces whole.
-const PICTURES = 3;
+// The version of what is kept of an EPUB's pictures: 4 since a white piece on a plain dark square is whole however
+// broken its thin outline (3: a picture's mark of the side to move is read, and a plain square's grey outlines keep its
+// pieces whole).
+const PICTURES = 4;
+// The version of how the boards in a PDF's pictures are looked at (diagrams.js findPictureBoard): when it changes, the
+// boards of its pages with their own text — diagrams in pictures, a page's scan behind its text — are looked for again
+// (quick: no OCR; a scanned page's are not, its words would be read again too). 1 since a white piece on a plain dark
+// square is whole however broken its thin outline (Mastering Endgame Strategy's pawns on its orange squares).
+const BOARDS = 1;
 // The version of how a book's boards are read (diagrams.js readBoards): when it changes, the boards kept from before —
 // a scanned PDF's, an EPUB's pictures' — are read again (not looked for again). 4 since a known position's squares that
 // plainly show another piece teach nothing (3: four of the app's piece sets to start from, the book's known positions
@@ -373,6 +379,10 @@ export async function openBook(meta) {
     const cache = await loadCache(meta.id);
     const kept = cache?.version === version && cache.pages?.length === doc.numPages;
     const pages = kept ? cache.pages : new Array(doc.numPages).fill(null);
+    // (boards looked at the older way: those of the pages with their own text looked for again — the student's fixes,
+    // kept by where a board is, stay theirs)
+    if (kept && cache.boards !== BOARDS)
+      for (const p of pages) if (p && !p.scan && p.scanned && p.diagrams?.some(d => d.board)) (p.diagrams = p.diagrams.filter(d => !d.board)), (p.scanned = false);
     // what is read of the pages is kept as it comes (a scanned book takes long), and when the book is closed
     let dirty = false;
     let savedAt = Date.now();
@@ -386,7 +396,7 @@ export async function openBook(meta) {
       if (!now && Date.now() - savedAt < 20000) return;
       dirty = false;
       savedAt = Date.now();
-      return saveCache(meta.id, { version, reading, pages, taught: state.taught }).catch(() => {});
+      return saveCache(meta.id, { version, boards: BOARDS, reading, pages, taught: state.taught }).catch(() => {});
     };
     // (the boards kept from before, read as boards were read then: read again, all together)
     if (reading !== READING) {

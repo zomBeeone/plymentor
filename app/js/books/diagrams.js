@@ -351,13 +351,13 @@ function hatchedInk(ink, n) {
  * With `wall` (a grey darker than the square's own, or than the paper between its hatching), a piece's outline lighter
  * than the ink — a small picture's thin grey lines — keeps the background out too.
  */
-export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false, wall = 0 } = {}) {
+export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false, wall = 0, bright = 256 } = {}) {
   const inset = Math.max(1, Math.round(size * 0.04));
   const X = Math.round(x0) + inset;
   const Y = Math.round(y0) + inset;
   const n = Math.max(8, Math.round(size) - 2 * inset);
   const dark = new Uint8Array(n * n);
-  const lines = wall > ink ? new Uint8Array(n * n) : null;
+  const lines = wall > ink || bright < 256 ? new Uint8Array(n * n) : null;
   let inkCount = 0;
   for (let y = 0; y < n; y++)
     for (let x = 0; x < n; x++) {
@@ -368,7 +368,7 @@ export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false, wa
         dark[y * n + x] = 1;
         inkCount++;
       }
-      if (lines && v < wall) lines[y * n + x] = 1;
+      if (lines && (v < wall || v > bright)) lines[y * n + x] = 1;
     }
   // (a hatched square whose hatching is lighter than the ink — a small scan's grey strokes — is read as a light one:
   // only its pieces are ink)
@@ -1390,6 +1390,27 @@ export function findPictureBoard(img, { why = () => {}, hatchWall = false } = {}
     if (!count) return 0;
     return hatched ? at(0.9) - 78 : at(0.5) - Math.max(16, 4 * (at(0.5) - at(0.25)));
   };
+  // (on plain dark squares — a colour, a grey, a wood's grain — a white piece's inside is much lighter than the square:
+  // the square's background stops there too, however broken the piece's thin outline — Mastering Endgame Strategy's
+  // white pawns on its orange squares came out a third of their size, and were taken for no piece)
+  const brightOf = () => {
+    const greys = new Uint32Array(256);
+    let count = 0;
+    for (let row = 0; row < 8; row++)
+      for (let col = 0; col < 8; col++) {
+        if (!isDark(row, col) || isMark(cellAt[found.r0 + row][found.c0 + col])) continue;
+        const x0 = Math.round(bx.offset + (found.c0 + col) * sx);
+        const y0 = Math.round(by.offset + (found.r0 + row) * sy);
+        for (let y = Math.max(0, y0 + Math.round(sy * 0.08)); y < Math.min(H, y0 + sy * 0.2); y++)
+          for (let x = Math.max(0, x0 + Math.round(sx * 0.08)); x < Math.min(W, x0 + sx * 0.92); x++) greys[data[y * W + x]]++, count++;
+      }
+    const at = q => {
+      for (let v = 0, k = 0; v < 256; v++) if ((k += greys[v]) >= count * q) return v;
+      return 255;
+    };
+    return count && at(0.9) <= 200 ? Math.min(240, at(0.9) + Math.max(24, 2 * (at(0.9) - at(0.5)))) : 256;
+  };
+  const darkBright = hatched ? 256 : brightOf();
   const lightWall = hatched ? 0 : wallOf(false);
   // (hatched ones an ebook's picture's only: on scans more boards came out a game cannot have — Kotov's 10 → 17%, and
   // Winning Chess Strategies' where its squares are small, as Inside the Chess Mind's, whose moves it did not help)
@@ -1405,7 +1426,8 @@ export function findPictureBoard(img, { why = () => {}, hatchWall = false } = {}
       const mark = isMark(cellAt[found.r0 + row][found.c0 + col]);
       const ink = mark ? inkOn(cellAt[found.r0 + row][found.c0 + col].tone) : darkSquare ? darkInk : 150;
       const wall = mark ? 0 : darkSquare ? darkWall : lightWall;
-      const shape = cellShape(img, x + col * fx + (fx - size) / 2, y + row * fy + (fy - size) / 2, size, { ink, darkSquare: darkSquare && hatched && !mark, wall });
+      const bright = darkSquare && !mark ? darkBright : 256;
+      const shape = cellShape(img, x + col * fx + (fx - size) / 2, y + row * fy + (fy - size) / 2, size, { ink, darkSquare: darkSquare && hatched && !mark, wall, bright });
       return { darkSquare, shape };
     }),
   );

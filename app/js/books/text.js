@@ -42,6 +42,39 @@ const MOVE = new RegExp(
  * fourth", "knight to f3") are `spelled`: see descriptive.js.
  */
 export function findMoves(text, { ocr = false } = {}) {
+  if (!ocr) return movesIn(text, false);
+  // (a scan's moves its OCR spelled out with spaces: found where the spaces are left out, put back where they stand)
+  const { joined, at } = unspaced(text);
+  if (joined === text) return movesIn(text, true);
+  return movesIn(joined, true).map(t => ({ ...t, start: at[t.start], end: at[t.end - 1] + 1, ...(t.glyph || t.ocr ? { words: text.slice(at[t.start], at[t.end - 1] + 1) } : {}) }));
+}
+
+// A scanner's OCR may write a move with spaces between its letters — the figurine (or the piece's letter), the file and
+// the rank: "2. * d 4 * d 6", "A x g 5", "# e 2", "K e 4" (Amateur to IM: its figurines read as "*", "A", "H", "^",
+// "#") —, and its pawn moves so after a move number or a move: "12. e 5", "* d 4 e 5". Such a move is one word without
+// its spaces: a glyph of one to three signs (no letter or digit) or one capital letter (or "l") — no word: "on e 1" is
+// a square in a sentence —, then the file and the rank, an "x" between them maybe.
+const SPACED = /(?<=^|[\s(])((?:[^\s\p{L}\p{N}()[\]{},;]{1,3}|[A-Zl]) (?:[x×:] )?)([a-h]) ([1-8])(?=[\s,;.)!?+#]|$)/gu;
+const SPACED_PAWN = /(?<=(?:^|[\s(])(?:\d{1,3}\s?(?:[.•]\s?){1,3}|[^\s()]{0,3}[a-h][1-8][+#!?]{0,2} ))([a-h]) ([1-8])(?=[\s,;.)!?+#]|$)/gu;
+
+/** `text` with the spaces of such moves left out (`joined`), and where each of its characters stands in `text` (`at`). */
+function unspaced(text) {
+  const drop = new Set();
+  // (the spaces of a match: those between its glyph, its file and its rank)
+  for (const m of text.matchAll(SPACED)) for (let i = m.index + m[1].indexOf(' '); i < m.index + m[0].length; i++) if (text[i] === ' ') drop.add(i);
+  // (a pawn move after a move number, or after a move — once the glyph moves above have been joined)
+  const kept = [];
+  for (let i = 0; i < text.length; i++) if (!drop.has(i)) kept.push(i);
+  for (const m of kept.map(i => text[i]).join('').matchAll(SPACED_PAWN)) drop.add(kept[m.index + 1]);
+  if (!drop.size) return { joined: text, at: null };
+  let joined = '';
+  const at = [];
+  for (let i = 0; i < text.length; i++) if (!drop.has(i)) (joined += text[i]), at.push(i);
+  at.push(text.length);
+  return { joined, at };
+}
+
+function movesIn(text, ocr) {
   const spelled = findSpelled(text);
   const overlap = (a, b) => a.start < b.end && a.end > b.start;
   // (a move spelled out holds its square: "knight to f3" is one move, not a pawn's)

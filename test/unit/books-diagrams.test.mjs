@@ -716,3 +716,66 @@ test('a picture’s unsure square read otherwise when more of the moves after it
   assert.equal(u.diagrams[0].node.fen.split(' ')[0], '6k1/5ppp/8/8/8/8/5PPP/5RK1');
   assert.ok(u.moves.every(m => m.node));
 });
+
+test('a picture’s white pieces on plain dark squares — a colour, with its grain — whole however broken their thin outlines', () => {
+  const examples = pieceSquares(64).map(p => pieceExample(p.type, p.img));
+  // white pawns on the dark squares (a1 is dark), one on a light square; their thin outlines broken at the bottom, where
+  // the square's colour runs into them
+  const fen = '4k3/8/8/2P5/1P1P4/P1P1P3/6P1/4K3';
+  const img = blankPage(480, 480, { sat: true });
+  drawPlainBoard(img, 40, 16, 52, fen, { dark: 140, light: 236, darkSat: 150, lightSat: 40, stroke: 2 });
+  for (const sq of ['c5', 'b4', 'd4', 'a3', 'c3', 'e3']) {
+    const x0 = 40 + 'abcdefgh'.indexOf(sq[0]) * 52;
+    const y0 = 16 + (8 - Number(sq[1])) * 52;
+    for (let y = Math.round(y0 + 52 * 0.73); y < y0 + 52 * 0.84; y++)
+      for (let x = Math.round(x0 + 52 * 0.46); x < x0 + 52 * 0.54; x++) (img.data[y * img.width + x] = 140), (img.sat[y * img.width + x] = 150);
+  }
+  const b = findPictureBoard(img);
+  assert.ok(b, 'a board');
+  // (each broken pawn as whole as the one on a light square, and as white: a third of it was read before, half ink)
+  const shape = sq => b.cells[8 - Number(sq[1])]['abcdefgh'.indexOf(sq[0])].shape;
+  for (const sq of ['c5', 'b4', 'd4', 'a3', 'c3', 'e3'])
+    assert.ok(shape(sq).area > shape('g2').area * 0.85 && Math.abs(shape(sq).fill - shape('g2').fill) < 0.1, `${sq}: ${shape(sq).area.toFixed(2)}/${shape(sq).fill.toFixed(2)}`);
+  const boards = [unpackBoard(JSON.parse(JSON.stringify(packBoard(b))))];
+  readBoards(boards, { examples });
+  assert.equal(placement(boards[0]), fen);
+});
+
+test('a scan’s moves its OCR spelled with spaces — the figurine, the file and the rank apart — found where they stand; a square in a sentence is none', () => {
+  const text = 'After 12. * d 4 * d 6 13. A x g 5 e 5 the king on e 1 is safe.';
+  const moves = findMoves(text, { ocr: true });
+  assert.deepEqual(
+    moves.map(t => [text.slice(t.start, t.end), t.num, t.glyph || null, t.san.slice(1)]),
+    [['12. * d 4', 12, '*', 'd4'], ['* d 6', null, '*', 'd6'], ['13. A x g 5', 13, 'A', 'xg5'], ['e 5', null, null, '5']],
+  );
+  // (an ebook's text has no OCR: none of them)
+  assert.deepEqual(findMoves(text), []);
+});
+
+test('a font’s figurines learnt together: one a piece the others are not, firmly — never played as another piece; a stray symbol is none of them', () => {
+  const fam = book => {
+    book.glyphs.set('\uE024', new Map([['K', 40]]));
+    book.glyphs.set('\uE025', new Map([['Q', 30]]));
+    book.glyphs.set('\uE026', new Map([['R', 35], ['K', 2]]));
+    book.glyphs.set('\uE027', new Map([['B', 25]]));
+    return book;
+  };
+  const book = fam(new BookMoves());
+  // (the knight's figurine: its moves only a knight could make too few to tell, the others' pieces counted out)
+  book.glyphs.set('\uE028', new Map([['N', 9], ['Q', 4], ['K', 4], ['R', 3]]));
+  // (a scan's lone "®", with the same moves: an OCR's spelling, no font's)
+  book.glyphs.set('®', new Map([['N', 9], ['Q', 4], ['K', 4], ['R', 3]]));
+  book.glyphs.set('*', new Map([['K', 40]]));
+  book.glyphs.set('©', new Map([['K', 40]]));
+  assert.deepEqual(['\uE024', '\uE028', '®', '*', '©'].map(g => book.pieceOf(g)), ['K', 'N', null, 'K', 'K']);
+  // (firm: a font's figurine — not an OCR's spelling: ASCII, or a symbol standing alone)
+  assert.deepEqual(['\uE024', '*', '©'].map(g => book.learnt(g).firm), [true, false, false]);
+  // the king's figurine where only the queen can go: no move (the position is not the one the book means)
+  let u = follow(fam(new BookMoves()), 'Position:\n\n1.\uE024h5 Kd7', [{ at: 11, placement: '4k3/8/8/8/8/8/8/3QK3', side: 'w', font: true }]);
+  assert.equal(u.moves[0].node, null);
+  // the king's figurine moving the king where a line and a variation of it both have it: the line it is read in
+  u = follow(fam(new BookMoves()), 'Position:\n\n1.Kf2 Kd7 2.Kf3 Ke7 3.Kg4 Kf6. Also 2.Ke3 Ke7 3.\uE024e4 Kd6', [{ at: 11, placement: '3k4/8/8/8/8/8/8/4K3', side: 'w', font: true }]);
+  assert.equal(u.moves[8].node?.san, 'Ke4');
+  assert.equal(u.moves[8].node.parent, u.moves[7].node);
+  assert.ok(u.moves[9].node);
+});

@@ -21,7 +21,7 @@
 // - a diagram: the position it shows — one of the game being read, when it is there, else a new game from it (after
 //   the move its caption says led to it: "Position after: 31. Nf3").
 import { Tree } from '../tree.js';
-import { posFromFen, uciOf, moveFromUci, fenOf, parseSan, repKey, dests, isPromotion, INITIAL_FEN } from '../chess.js';
+import { posFromFen, uciOf, moveFromUci, fenOf, parseSan, repKey, dests, isPromotion, squareIndex, INITIAL_FEN } from '../chess.js';
 import { spokenMove } from './text.js';
 import { descriptiveMoves, spokenDescriptive } from './descriptive.js';
 
@@ -238,6 +238,9 @@ function moveIn(pos, san) {
   }
 }
 
+/** The kind of piece ('king', 'rook' …) the move `uci` moves in the position `fen`, or null. */
+const roleOf = (fen, uci) => positionOf(fen)?.board.get(squareIndex(uci.slice(0, 2)))?.role || null;
+
 /** The move `san` in the position of `node`, as UCI (null when it is not a legal move there). */
 function moveAt(node, san) {
   const pos = positionOf(node.fen);
@@ -254,7 +257,8 @@ function playableIn(pos, t) {
   if (t.desc) return descriptiveMoves(fenOf(pos), t.desc)[0] || null;
   if (t.glyph) {
     const legal = t.sans.map(san => [san, moveIn(pos, san)]).filter(([, uci]) => uci);
-    if (new Set(legal.map(([san]) => san[0])).size === 1) return legal[0][1];
+    // (a glyph firmly learnt: its piece's move, or none — see BookMoves.learnt)
+    if (!t.firm && new Set(legal.map(([san]) => san[0])).size === 1) return legal[0][1];
     return legal.find(([san]) => san[0] === t.piece)?.[1] || null;
   }
   for (const san of t.sans || [t.san]) {
@@ -279,7 +283,7 @@ function readings(node, t) {
   }
   const legal = t.sans.map(san => [san, moveIn(pos, san)]).filter(([, uci]) => uci);
   const learnt = legal.find(([san]) => san[0] === t.piece);
-  return learnt ? [learnt[1]] : [...new Set(legal.map(([, uci]) => uci))];
+  return learnt ? [learnt[1]] : t.firm ? [] : [...new Set(legal.map(([, uci]) => uci))];
 }
 
 /** The legal moves of a position as UCI (a pawn reaching the last rank: a queen). */
@@ -648,8 +652,11 @@ export class MoveTracker {
       if (legal.length && !t.num) break;
     }
     let chosen = (t.num || legal.length > 1) && ahead.length ? this.pick(t, legal, ahead, para) : legal[0];
-    // (a lost figurine more than one piece can be, the moves after it no help to tell which: none)
-    if (t.glyph && (chosen?.tied || legal.length) > 1) chosen = null;
+    // (a lost figurine more than one piece can be, the moves after it no help to tell which: none — not a font's
+    // figurine firmly learnt, moving its piece in two places, the line read and a variation of it: that doubt is the
+    // line's, settled as any move's is — Mastering Endgame Strategy's king walks, "2.Ke3 Ke7 3.Ke4", were lost where a
+    // variation's king could reach e4 too; an OCR's spelling is no sure piece: The Soviet Chess Primer lost moves)
+    if (t.glyph && (chosen?.tied || legal.length) > 1 && !(t.firm && new Set(legal.map(c => roleOf(c.node.fen, c.uci))).size === 1)) chosen = null;
     // ("1." of White's first move where the moves after it cannot be played — the first position of a diagram's game,
     // with the number and side a guess —, or fewer of them than from the initial position — as many, in a game the
     // reading has left —: a game of its own from the initial position — "After 1.c4 c5 2.b3 …")
@@ -908,6 +915,26 @@ const OCR_FIGURINES = {
   'i.': 'B', iL: 'B', 'i..': 'B', 'il.': 'B', 'ii.': 'B', 'J.': 'B', 'j.': 'B',
   ttJ: 'N', liJ: 'N', ltJ: 'N', lLl: 'N', lD: 'N', tD: 'N', tiJ: 'N', tLl: 'N',
 };
+// (a font's own figurine, without Unicode for it: one character of its own — of the private use area, as Mastering
+// Endgame Strategy's, or a symbol such as "¢", as The Woodpecker Method's —, no ASCII an OCR reads, no letter or digit,
+// not "�")
+const FIGURINE = /^[^\x00-\x7F\p{L}\p{N}�]$/u;
+// (the moves only one piece could make that make a glyph that piece's alone: see BookMoves.learnt)
+const FIRM = 12;
+
+/** A glyph's moves where only one piece could go, as [[piece, count]], most first. */
+const sorted = seen => [...(seen || new Map())].sort((a, b) => b[1] - a[1]);
+
+/**
+ * The piece such moves show clearly — twice, and twice as often as any other, and seven times in ten; or, from eight
+ * moves on, three times as often as any other and half the times (see BookMoves.pieceOf) — or null.
+ */
+function clearOf(seen) {
+  const all = seen.reduce((n, [, k]) => n + k, 0);
+  const top = seen[0]?.[1] || 0;
+  const next = seen[1]?.[1] || 0;
+  return (top >= 2 && top >= 2 * next && top >= all * 0.7) || (top >= 8 && top >= 3 * next && top >= all * 0.5) ? seen[0][0] : null;
+}
 
 /**
  * Follows the moves of a book, unit by unit — its pages or chapters, in reading order, { text, moves, diagrams }
@@ -921,6 +948,7 @@ export class BookMoves {
     this.gap = ''; // the text after the last move, up to the next unit
     this.prev = null; // the last move followed
     this.glyphs = new Map(); // a lost figurine's glyph → { piece letter: moves where only that piece could go }
+    this.known = new Map(); // (learnt's answers since the last move learnt from)
     this.labels = new Map(); // a diagram's number (see labelsOf) → the diagram (null: more than one has it)
     this.lastNum = null; // the number of the last numbered move of the text
   }
@@ -934,12 +962,36 @@ export class BookMoves {
    * placed, Pump Up +150, The Soviet Chess Primer +83, Kotov +51, no book fewer.
    */
   pieceOf(glyph) {
-    const seen = [...(this.glyphs.get(glyph) || new Map())].sort((a, b) => b[1] - a[1]);
-    const all = seen.reduce((n, [, k]) => n + k, 0);
-    const top = seen[0]?.[1] || 0;
-    const next = seen[1]?.[1] || 0;
-    const clear = (top >= 2 && top >= 2 * next && top >= all * 0.7) || (top >= 8 && top >= 3 * next && top >= all * 0.5);
-    return glyph !== '\uFFFD' && clear ? seen[0][0] : OCR_FIGURINES[glyph] || null;
+    return this.learnt(glyph)?.piece || OCR_FIGURINES[glyph] || null;
+  }
+
+  /**
+   * What the book's moves have shown a lost figurine's glyph to be (see pieceOf): { piece, firm } or null. A font's own
+   * figurine — one character of its own (FIGURINE), one per piece — is firm once FIRM of its moves could only be that
+   * piece's: its moves are then that piece's alone — another piece that can go there means a position the move does not
+   * belong to (Mastering Endgame Strategy's king's figurine was played as a queen or a rook 1,265 times). It is also
+   * the piece most of its moves showed when that is no piece another of the book's figurines has been learnt to be (its
+   * other readings are counted out): the moves of a piece the book moves rarely teach slowly, and moves placed in wrong
+   * positions add the other pieces (Mastering Endgame Strategy's knight: N 277, Q 123, K 122, R 77).
+   */
+  learnt(glyph) {
+    if (glyph === '\uFFFD') return null;
+    if (this.known.has(glyph)) return this.known.get(glyph);
+    const seen = sorted(this.glyphs.get(glyph));
+    let piece = clearOf(seen);
+    // (a font's figurines come together — characters near each other, two others at least shown clearly to be other
+    // pieces —; an OCR's stray symbol stands alone: The Soviet Chess Primer's "®", Kotov's "•")
+    const kin = new Set();
+    if (FIGURINE.test(glyph))
+      for (const [g, s] of this.glyphs) if (g !== glyph && FIGURINE.test(g) && Math.abs(g.codePointAt(0) - glyph.codePointAt(0)) <= 32) kin.add(clearOf(sorted(s)));
+    kin.delete(null);
+    const font = kin.size >= 2;
+    if (!piece && font && seen.length && !kin.has(seen[0][0])) piece = clearOf(seen.filter(([p]) => !kin.has(p)));
+    // (only a font's figurine is firm: an OCR may spell two pieces alike — the 158-page Inside the Chess Mind, Pump Up
+    // Your Rating, The Soviet Chess Primer and Amateur to IM lost moves when their spellings were)
+    const out = piece ? { piece, firm: font && this.glyphs.get(glyph).get(piece) >= FIRM } : null;
+    this.known.set(glyph, out);
+    return out;
   }
 
   /** A lost figurine's move was played where only one piece could make it: that piece is what the glyph stands for. */
@@ -950,6 +1002,7 @@ export class BookMoves {
     const [piece] = legal;
     seen.set(piece, (seen.get(piece) || 0) + 1);
     this.glyphs.set(t.glyph, seen);
+    this.known.clear();
   }
 
   get trees() {
@@ -1002,7 +1055,7 @@ export class BookMoves {
       for (let j = i + 1, end = t.end; j < unit.moves.length && ahead.length < 8; end = unit.moves[j++].end) ahead.push({ t: unit.moves[j], between: unit.text.slice(end, unit.moves[j].start) });
       // (a paragraph begins: after a sentence's end and a line break, or a blank line)
       const para = /(?:[.!?…]["'”’)\]]*[ \t]*\n|\n[ \t]*\n)\s*$/.test(between);
-      for (const a of [t, ...ahead.map(x => x.t)]) if (a.glyph) a.piece = this.pieceOf(a.glyph);
+      for (const a of [t, ...ahead.map(x => x.t)]) if (a.glyph) (a.piece = this.pieceOf(a.glyph)), (a.firm = !!this.learnt(a.glyph)?.firm);
       // (a move number cut in two by a scan's OCR — "1 4.Nxe4" — is the one the line being read, or the moves written
       // before it, go on with; else the first part is a puzzle's number and the second the move's: "1 1.Qxg7#")
       if (t.cut) {
