@@ -1,8 +1,21 @@
 // Move tree with variations (like lichess' analysis tree).
-import { parsePgn, parseComment, startingPosition } from '../vendor/chessops.js';
+import { parsePgn, parseComment, startingPosition, makeSquare } from '../vendor/chessops.js';
 import { posFromFen, fenOf, moveFromUci, uciOf, makeSan, parseSan, INITIAL_FEN, repKey } from './chess.js';
 
 let ids = 0;
+
+const BRUSHES = { green: 'G', red: 'R', yellow: 'Y', blue: 'B' };
+
+/** A PGN comment's text, and its arrows and circled squares ([%cal]/[%csl]) as the board draws them. */
+function readComment(text, node) {
+  const c = parseComment(text);
+  for (const s of c.shapes || []) if (s) node.shapes.push(s.from === s.to ? { orig: makeSquare(s.from), brush: s.color } : { orig: makeSquare(s.from), dest: makeSquare(s.to), brush: s.color });
+  if (c.clock !== undefined) node.clock = c.clock;
+  return c.text?.trim() || '';
+}
+
+/** The comments of a node as the student reads them: those before the move (a variation's first), then after it. */
+export const commentsOf = node => [...node.preComments, ...node.comments];
 
 export class TreeNode {
   constructor({ parent = null, uci = null, san = null, fen, ply = 0, color = null, moveNumber = 0 }) {
@@ -15,7 +28,9 @@ export class TreeNode {
     this.color = color; // colour of the player who made this move
     this.moveNumber = moveNumber;
     this.children = [];
-    this.comments = [];
+    this.preComments = []; // a PGN's comments before the move (at the start of a variation)
+    this.comments = []; // after it (at the root: the game's opening comment)
+    this.shapes = []; // the arrows and circles of its comments
     this.nags = [];
     this.clock = null;
     this.judge = null; // live move judgement (from /api/engine/move) or game analysis
@@ -141,6 +156,13 @@ export class Tree {
     const start = startingPosition(game.headers);
     if (start.isErr) throw new Error('Invalid starting position in the PGN');
     const tree = new Tree(fenOf(start.value));
+    const keep = (list, texts, node) => {
+      for (const c of texts || []) {
+        const t = readComment(c, node);
+        if (t) list.push(t);
+      }
+    };
+    keep(tree.root.comments, game.comments, tree.root);
     const walk = (pgnNode, treeNode) => {
       for (const child of pgnNode.children) {
         const pos = posFromFen(treeNode.fen);
@@ -149,11 +171,8 @@ export class Tree {
         const r = tree.addMove(treeNode, uciOf(pos, move));
         if (!r) continue;
         const n = r.node;
-        for (const c of child.data.comments || []) {
-          const pc = parseComment(c);
-          if (pc.text?.trim()) n.comments.push(pc.text.trim());
-          if (pc.clock !== undefined) n.clock = pc.clock;
-        }
+        keep(n.preComments, child.data.startingComments, n);
+        keep(n.comments, child.data.comments, n);
         if (child.data.nags?.length) n.nags = child.data.nags;
         walk(child, n);
       }
@@ -172,14 +191,21 @@ export class Tree {
     const head = Object.entries(h)
       .map(([k, v]) => `[${k} "${String(v).replace(/"/g, "'")}"]`)
       .join('\n');
+    const comment = c => `{${c.replace(/[{}]/g, '')}}`;
+    // its comments' arrows and circles, as one more comment
+    const shapes = node => {
+      const marks = (list, tag) => (list.length ? `[%${tag} ${list.map(s => `${BRUSHES[s.brush] || 'G'}${s.orig}${s.dest || ''}`).join(',')}]` : '');
+      const text = [marks(node.shapes.filter(s => !s.dest), 'csl'), marks(node.shapes.filter(s => s.dest), 'cal')].filter(Boolean).join(' ');
+      return text ? ` {${text}}` : '';
+    };
     const moveText = (node, forceNumber) => {
-      let s = '';
+      let s = node.preComments.map(c => `${comment(c)} `).join('');
       if (node.color === 'white') s += `${node.moveNumber}. `;
-      else if (forceNumber) s += `${node.moveNumber}... `;
+      else if (forceNumber || node.preComments.length) s += `${node.moveNumber}... `;
       s += node.san;
       for (const nag of node.nags) s += ` $${nag}`;
-      for (const c of node.comments) s += ` {${c.replace(/[{}]/g, '')}}`;
-      return s;
+      for (const c of node.comments) s += ` ${comment(c)}`;
+      return s + shapes(node);
     };
     const line = (node, forceNumber) => {
       const parts = [];
@@ -187,7 +213,7 @@ export class Tree {
       let force = forceNumber;
       for (;;) {
         parts.push(moveText(n, force));
-        force = n.comments.length > 0;
+        force = n.comments.length > 0 || n.shapes.length > 0;
         const p = n.parent;
         if (p && p.children[0] === n && p.children.length > 1) {
           for (const v of p.children.slice(1)) parts.push(`(${line(v, true)})`);
@@ -198,7 +224,8 @@ export class Tree {
       }
       return parts.join(' ');
     };
-    const body = this.root.children.length ? line(this.root.children[0], true) : '';
+    const intro = [...this.root.comments.map(comment), shapes(this.root).trim()].filter(Boolean).join(' ');
+    const body = [intro, this.root.children.length ? line(this.root.children[0], true) : ''].filter(Boolean).join(' ');
     return `${head}\n\n${body} ${h.Result}\n`;
   }
 }

@@ -99,6 +99,22 @@ CREATE TABLE IF NOT EXISTS repertoire (
 );
 CREATE INDEX IF NOT EXISTS repertoire_key ON repertoire(color, key);
 
+-- the student's groups of repertoire lines ("French", "Against the Sicilian"…); a move can be in several groups (1. e4
+-- begins both the French and the Caro-Kann), and the lines in none are the repertoire's other lines
+CREATE TABLE IF NOT EXISTS repertoire_groups (
+  id INTEGER PRIMARY KEY,
+  color TEXT NOT NULL,
+  name TEXT NOT NULL COLLATE NOCASE,
+  created_at INTEGER NOT NULL,
+  UNIQUE(color, name)
+);
+CREATE TABLE IF NOT EXISTS repertoire_group_moves (
+  group_id INTEGER NOT NULL REFERENCES repertoire_groups(id) ON DELETE CASCADE,
+  move_id INTEGER NOT NULL REFERENCES repertoire(id) ON DELETE CASCADE,
+  PRIMARY KEY (group_id, move_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS repertoire_group_moves_move ON repertoire_group_moves(move_id);
+
 CREATE TABLE IF NOT EXISTS exercises (
   id INTEGER PRIMARY KEY,
   fen TEXT NOT NULL UNIQUE,

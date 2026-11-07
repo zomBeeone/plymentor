@@ -18,8 +18,9 @@ const MODES = {
 
 /**
  * ctx: { mode, startFen, ucis (moves from startFen to the current position), fen (fallback), gameId,
- *        engine: { depth, lines: [{ score, pv }] }, lastMove: { san, classification, best, ... },
- *        lastComment, play: { level, color }, exercise: { prompt }, orientation, note }
+ *        engine: { depth, lines: [{ score, pv }] }, lastMove: { san, classification, best, ... }, comment (the note
+ *        on the move the student sees), commentFrom ('pgn' | 'repertoire'),
+ *        lastComment, play: { level, color, byCoach, goal }, drill: { color, group }, exercise: { prompt }, orientation, note }
  */
 export function buildBoardContext(ctx = {}) {
   const L = ['<board_context>'];
@@ -56,9 +57,12 @@ export function buildBoardContext(ctx = {}) {
       L.push(`Loaded game: ${gameSummary(g)}${color ? ` — the student played ${color}` : ''}${g.analysis ? ' (engine-analysed)' : ''}`);
     }
   }
-  if (ctx.play) L.push(`Training game vs Stockfish (${ctx.play.level || 'engine'}); the student plays ${ctx.play.color}.`);
+  if (ctx.play)
+    L.push(
+      `Training game vs Stockfish (${ctx.play.level || 'engine'}); the student plays ${ctx.play.color}.${ctx.play.byCoach ? ` You started it (start_training_game)${ctx.play.goal ? ` with the goal: ${String(ctx.play.goal).slice(0, 200)}` : ''}.` : ''}`,
+    );
   if (ctx.exercise?.prompt) L.push(`Exercise: ${ctx.exercise.prompt}`);
-  if (ctx.drill) L.push(`Repertoire drill (${ctx.drill.color}).`);
+  if (ctx.drill) L.push(`Repertoire drill (${ctx.drill.color}${ctx.drill.group ? `, the group "${String(ctx.drill.group).slice(0, 60)}"` : ', all its lines'}).`);
   if (sans.length) {
     const shown = sans.length > 120 ? `… (${sans.length - 120} earlier plies omitted) ` : '';
     let p = start.clone();
@@ -92,6 +96,8 @@ export function buildBoardContext(ctx = {}) {
     );
   }
   if (ctx.lastComment) L.push(`Your previous short comment to the student: "${String(ctx.lastComment).slice(0, 600)}"`);
+  if (ctx.comment)
+    L.push(`The note on this move that the student sees (${ctx.commentFrom === 'repertoire' ? 'in their repertoire' : "from the game's PGN"}, not written by you): "${String(ctx.comment).slice(0, 1000)}"`);
   if (ctx.note) L.push(String(ctx.note).slice(0, 1000));
   L.push('</board_context>');
   return L.join('\n');

@@ -591,7 +591,7 @@ function Reader({ id }) {
             onCancel=${() => setEditing(null)}
           />`
         : html`<div class="board-area">
-            ${s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${engineOn ? live?.lines?.[0]?.score || null : null} orientation=${orientation} />`}
+            ${s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${engineOn ? live?.lines?.[0]?.score || null : null} fen=${node?.fen} off=${!engineOn} orientation=${orientation} />`}
             <${Board} fen=${node?.fen || INITIAL_FEN} hide=${hiddenSquares(view?.tree, node?.fen)} lastMove=${node?.uci ? [node.uci.slice(0, 2), node.uci.slice(2, 4)] : null} orientation=${orientation} movable="both" onMove=${play} shapes=${shapes} />
           </div>`}
       <div class="book-controls">

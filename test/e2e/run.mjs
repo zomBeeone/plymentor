@@ -289,6 +289,33 @@ async function main() {
     await page.waitFor(`document.querySelector('.engine .switch.on') && /depth [1-9]/.test(document.querySelector('.engine')?.innerText || '')`, { timeout: 30000, what: 'Stockfish on again' });
   });
 
+  await step('the board: a PGN’s comments — marks in the move list, the move’s comment under it, its arrows; the evaluation bar: all White’s at a checkmate, none with Stockfish off', async () => {
+    const pgn = `[Event "Comments"]\n\n{A short game} 1. e4 e5 2. Bc4 {Aiming at f7 [%cal Gc4f7]} Nc6 3. Qh5 {The queen joins the attack} Nf6 $4 {A blunder} (3... g6 {Defends}) 4. Qxf7# 1-0`;
+    await page.click('.side-col.middle .tab', 'Moves');
+    await page.click('button', 'Load PGN / FEN');
+    await page.waitFor(`document.querySelector('.modal textarea')`, { what: 'the load dialog' });
+    await page.type('.modal textarea', pgn);
+    await page.click('.modal .btn.primary', 'Load');
+    // at the checkmate: the bar is all White's (Stockfish has no lines there)
+    await page.waitFor(`document.querySelector('.ml-move.active')?.textContent.includes('Qxf7') && document.querySelector('.board-area .eval-bar .white')?.style.height === '100%'`, { what: 'the bar all White’s at the mate' });
+    const list = await page.eval(`({ marks: document.querySelectorAll('.movelist .cm').length, text: document.querySelector('.movelist').innerText, note: !!document.querySelector('.move-comment') })`);
+    assert(list.marks === 5 && !/queen joins|Defends|short game/.test(list.text) && !list.note, `the move list: ${JSON.stringify(list)}`);
+    // a move's comment under the list; the comment's arrow on the board
+    await page.click('.movelist .ml-move', 'Qh5');
+    await page.waitFor(`/3\\. Qh5\\s+The queen joins the attack/.test(document.querySelector('.panel .move-comment')?.innerText || '')`, { what: 'the comment of 3. Qh5' });
+    await page.click('.movelist .ml-move', 'Bc4');
+    await page.waitFor(`/Aiming at f7/.test(document.querySelector('.move-comment')?.innerText || '') && [...document.querySelectorAll('.board-area .cg-wrap svg line')].some(l => l.getAttribute('stroke') === '#15781B' && l.getAttribute('opacity') === '1')`, { what: 'the comment’s green arrow' });
+    await page.click('.movelist .vm', 'g6');
+    await page.waitFor(`/Defends/.test(document.querySelector('.move-comment')?.innerText || '')`, { what: 'a variation’s comment' });
+    await page.click('.movelist .ml-intro');
+    await page.waitFor(`/Before the first move\\s+A short game/.test(document.querySelector('.move-comment')?.innerText || '')`, { what: 'the comment before the first move' });
+    // Stockfish off: no evaluation bar (its room kept); on again
+    await page.click('.side-col.middle .engine .switch');
+    await page.waitFor(`(b => b && getComputedStyle(b).visibility === 'hidden')(document.querySelector('.board-area .eval-bar.off'))`, { what: 'no bar with Stockfish off' });
+    await page.click('.side-col.middle .engine .switch');
+    await page.waitFor(`document.querySelector('.board-area .eval-bar') && !document.querySelector('.board-area .eval-bar.off')`, { what: 'the bar back' });
+  });
+
   await step('a training game against Stockfish', async () => {
     await page.click('button', 'Play vs Stockfish');
     await page.waitFor(`document.querySelector('.modal')`, { what: 'the new-game dialog' });
@@ -300,6 +327,28 @@ async function main() {
     await page.waitFor(`document.querySelectorAll('.movelist .ml-move:not(.empty)').length >= 2`, { timeout: 20000, what: 'the engine’s reply' });
     await page.click('button', 'Resign');
     await page.waitFor(`document.body.innerText.includes('You lost')`, { what: 'the result' });
+  });
+
+  await step('the coach makes the student play an endgame against Stockfish (start_training_game): the app goes to the Board, the goal shows, the result goes back to the coach', async () => {
+    // (asked on the Openings screen: the app goes to the Board for the game)
+    await go(page, '#/openings');
+    await page.click('.side-col:not(.middle) .tab', 'Coach');
+    await page.waitFor(`[...document.querySelectorAll('.xterm-helper-textarea')].some(t => t.offsetParent)`, { what: 'the coach panel' });
+    await ask(page, 'Please give me an endgame to play');
+    await page.waitFor(`/training game: ok/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 20000, what: 'the coach’s answer' });
+    await page.waitFor(
+      `location.hash.startsWith('#/analysis') && /Your coach's goal:\\s*Mate with the rook/.test(document.querySelector('.board-caption.goal')?.innerText || '') && /vs Beginner · you play white/.test(document.querySelector('.side-col.middle .panel-head')?.innerText || '')`,
+      { timeout: 15000, what: 'the game on the Board, with its goal' },
+    );
+    await page.waitFor(`/game seen: started by me/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 15000, what: 'the coach seeing the game it started' });
+    assert(await page.eval(`[...document.querySelectorAll('.board-controls button')].some(b => /Back to your last game/.test(b.textContent))`), 'the game before waits behind “↩ Back to your last game”');
+    // the student's move and Stockfish's reply; then they resign: the coach hears the result and its goal
+    await page.clickSquare('.board-area .cg-wrap', 'a1');
+    await page.clickSquare('.board-area .cg-wrap', 'a5');
+    await page.waitFor(`document.querySelectorAll('.movelist .ml-move:not(.empty)').length >= 2`, { timeout: 20000, what: 'Stockfish’s reply' });
+    await page.click('button', 'Resign');
+    await page.waitFor(`document.body.innerText.includes('You lost')`, { what: 'the result' });
+    await page.waitFor(`/game end: 0-1 \\+ goal/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 20000, what: 'the result at the coach, with its goal' });
   });
 
   await step('reports: statistics, then the coach writes the report', async () => {
@@ -392,6 +441,64 @@ async function main() {
     await page.waitFor(`document.querySelector('.panel.moves .movelist .active')?.textContent.includes('d4')`, { what: 'another line' });
     const after = await page.eval(`({ main: document.querySelector('main').scrollTop, moves: document.querySelectorAll('.panel.moves .movelist .ml-move:not(.empty)').length })`);
     assert(after.main === 0 && after.moves === 24, `afterwards: ${JSON.stringify(after)}`);
+  });
+
+  await step('openings: groups — a PGN into a new group with its notes read under the moves, a line added to another group, one group drilled on its own, a group deleted with its lines; no evaluation bar with Stockfish off', async () => {
+    const pgn = `[Event "French Defence"]\n\n1. e4 e6 2. d4 d5 3. Nc3 {The main line} Bb4 {The Winawer} (3... Nf6 {The Classical}) 4. e5 c5 *`;
+    const folder = name => `[...document.querySelectorAll('.rep-group')].find(g => g.querySelector('.rep-group-name')?.textContent.includes(${JSON.stringify(name)}))`;
+    const moves = name => `(${folder(name)}?.querySelectorAll('.rep-tree .vm').length ?? -1)`;
+    await go(page, '#/openings');
+    await page.click('.side-col:not(.middle) .tab', 'Repertoire');
+    await page.click('button', 'Black repertoire');
+    // the PGN into a new group, named from its headers
+    await page.click('button', 'Import PGN');
+    await page.waitFor(`document.querySelector('.modal textarea')`, { what: 'the import dialog' });
+    await page.type('.modal textarea', pgn);
+    await page.eval(`(s => { s.value = 'new'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })(document.querySelector('.modal select'))`);
+    await page.waitFor(`document.querySelector('.modal input[type=text]')?.placeholder === 'French Defence'`, { what: 'the name suggested from the PGN' });
+    await page.click('.modal .btn.primary', 'Import');
+    await page.waitFor(`${moves('French Defence')} === 9`, { what: 'the group with its 9 moves' });
+    // a move with a note: its line on the board, the note under the moves (a mark in the list), the group chosen
+    await page.eval(`[...${folder('French Defence')}.querySelectorAll('.rep-tree .vm')].find(v => v.textContent.startsWith('3. Nc3')).click()`);
+    await page.waitFor(`/3\\. Nc3\\s+The main line/.test(document.querySelector('.panel.moves .move-comment')?.innerText || '')`, { what: 'the note of 3. Nc3 under the moves' });
+    const here = await page.eval(
+      `({ marks: document.querySelectorAll('.panel.moves .movelist .cm').length, text: document.querySelector('.panel.moves .movelist').innerText, target: document.querySelector('.rep-target select')?.selectedOptions[0]?.textContent, chips: [...document.querySelectorAll('.rep-here .chip')].map(c => c.textContent) })`,
+    );
+    assert(here.marks === 1 && !/main line/.test(here.text) && here.target === 'French Defence' && here.chips.join() === 'French Defence✕', `on the board: ${JSON.stringify(here)}`);
+    // another group, and a line into it
+    await page.click('.rep-actions button', 'Group');
+    await page.waitFor(`document.querySelector('.rep-new input')`, { what: 'the new group’s name' });
+    await page.type('.rep-new input', 'Sicilian');
+    await page.click('.rep-new button', 'Make the group');
+    await page.waitFor(`${folder('Sicilian')} && document.querySelector('.rep-target select')?.selectedOptions[0]?.textContent === 'Sicilian'`, { what: 'the new group, chosen for the next line' });
+    await page.click('.board-controls button', 'Reset');
+    const side = await page.eval(`document.querySelector('.board-area .cg-wrap').classList.contains('orientation-black') ? 'black' : 'white'`);
+    for (const sq of ['e2', 'e4', 'c7', 'c5']) await page.clickSquare('.board-area .cg-wrap', sq, side);
+    await page.waitFor(`document.querySelector('.panel.moves .movelist .active')?.textContent.includes('c5')`, { what: '1. e4 c5 on the board' });
+    await page.click('.rep-actions button', 'Add current line');
+    await page.waitFor(`${moves('Sicilian')} === 2 && ${moves('French Defence')} === 9`, { what: 'the line in Sicilian, its 1. e4 in both groups' });
+    // the French Defence drilled on its own: the Sicilian's 1...c5 is not one of its moves
+    await page.eval(`[...${folder('French Defence')}.querySelectorAll('.rep-group-head button')].find(b => b.textContent.trim() === 'Drill').click()`);
+    await page.waitFor(`/Play your repertoire moves: French Defence/.test(document.querySelector('.feedback')?.innerText || '')`, { what: 'the drill of French Defence' });
+    await sleep(1200); // (the drill plays 1. e4)
+    await page.clickSquare('.board-area .cg-wrap', 'c7', 'black');
+    await page.clickSquare('.board-area .cg-wrap', 'c5', 'black');
+    await page.waitFor(`/c5 is not in French Defence\\. Play e6/.test(document.querySelector('.feedback')?.innerText || '')`, { what: 'the Sicilian’s move refused' });
+    await sleep(900);
+    await page.clickSquare('.board-area .cg-wrap', 'e7', 'black');
+    await page.clickSquare('.board-area .cg-wrap', 'e6', 'black');
+    await page.waitFor(`/French Defence · ✓ 1 · ✗ 1/.test(document.querySelector('.board-controls')?.innerText || '')`, { what: 'the drill’s count' });
+    await page.click('button', 'Stop drill');
+    // a group deleted with its lines: 1. e4 stays, French Defence has it too
+    await page.eval(`${folder('Sicilian')}.querySelector('button[title="Delete the group"]').click()`);
+    await page.waitFor(`/Delete the group Sicilian\\?/.test(document.querySelector('.modal h2')?.innerText || '')`, { what: 'the delete dialog' });
+    await page.click('.modal button', 'Delete it and its lines');
+    await page.waitFor(`!${folder('Sicilian')} && ${moves('French Defence')} === 9 && document.querySelectorAll('.rep-group').length === 1`, { what: 'Sicilian gone, French Defence whole' });
+    // Stockfish off on this screen: no evaluation bar; on again
+    await page.click('.side-col.middle .engine .switch');
+    await page.waitFor(`(b => b && getComputedStyle(b).visibility === 'hidden')(document.querySelector('.board-area .eval-bar.off'))`, { what: 'no bar with Stockfish off' });
+    await page.click('.side-col.middle .engine .switch');
+    await page.waitFor(`document.querySelector('.board-area .eval-bar') && !document.querySelector('.board-area .eval-bar.off')`, { what: 'the bar back' });
   });
 
   await step('train: exercises — the one on the board highlighted in the deck, the ones done marked', async () => {

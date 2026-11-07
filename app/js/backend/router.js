@@ -1,7 +1,7 @@
 // The app's local API, served inside the backend worker: the same /api/... requests the screens made to the local
 // server of Chess Coach 1.x, answered in the window from the games database and the Stockfish workers. Nothing here
 // goes over the network (except the optional Lichess / Chess.com requests in online.js).
-import { run, get, all, now, json, exportDatabase, restoreDatabase } from './db.js';
+import { run, get, all, tx, now, json, exportDatabase, restoreDatabase } from './db.js';
 import { getSettings, updateSettings, publicSettings } from './settings.js';
 import { evaluate, evaluateMove, playMove, PLAY_LEVELS, engineInfo, restartEngines } from './engine/pool.js';
 import { PgnImporter, listGames, getGame, collections, players, explorer, myNames, allGameIds, deleteGames } from './games.js';
@@ -21,6 +21,12 @@ import {
   importRepertoirePgn,
   reviewRepertoireMove,
   repertoireStats,
+  repertoireGroups,
+  findRepertoireGroup,
+  createRepertoireGroup,
+  renameRepertoireGroup,
+  deleteRepertoireGroup,
+  removeFromRepertoireGroup,
   listExercises,
   deleteExercise,
   reviewExercise,
@@ -237,14 +243,15 @@ route('POST', '/api/backup/restore', async ({ body }) => {
 
 route('GET', '/api/repertoire', ({ query }) => {
   const color = query.color === 'black' ? 'black' : 'white';
-  return { color, entries: repertoire(color), stats: repertoireStats(color) };
+  const entries = repertoire(color);
+  return { color, entries, stats: repertoireStats(color), groups: repertoireGroups(color, entries) };
 });
 route('POST', '/api/repertoire/add', ({ body }) => {
-  const { color, moves, fen, uci, comment } = obj(body);
+  const { color, moves, fen, uci, comment, group } = obj(body);
   if (color !== 'white' && color !== 'black') throw new HttpError(400, 'color must be white or black');
   if (moves) {
     if (!Array.isArray(moves) || moves.length > 80) throw new HttpError(400, 'Invalid moves');
-    return addLineToRepertoire(color, moves.map(String), comment ? String(comment).slice(0, 500) : null);
+    return addLineToRepertoire(color, moves.map(String), comment ? String(comment).slice(0, 500) : null, { group: Number(group) || null });
   }
   addMoveToRepertoire(color, fen, uci, comment ? String(comment).slice(0, 500) : null);
   return { ok: true };
@@ -254,10 +261,28 @@ route('POST', '/api/repertoire/remove', ({ body }) => {
   removeFromRepertoire(color === 'black' ? 'black' : 'white', String(key || ''), String(uci || ''));
   return { ok: true };
 });
+/** body: { color, pgn, group (a group's id) or groupName (a group by its name, made when there is none) }. */
 route('POST', '/api/repertoire/import', ({ body }) => {
-  const { color, pgn } = obj(body);
+  const { color, pgn, group, groupName } = obj(body);
   if (color !== 'white' && color !== 'black') throw new HttpError(400, 'color must be white or black');
-  return importRepertoirePgn(color, String(pgn || '').slice(0, 5_000_000));
+  // (one transaction: a PGN that cannot be read leaves no new, empty group behind)
+  return tx(() => {
+    const named = groupName ? findRepertoireGroup(color, groupName) || createRepertoireGroup(color, groupName) : null;
+    return importRepertoirePgn(color, String(pgn || '').slice(0, 5_000_000), { group: named ? named.id : Number(group) || null });
+  });
+});
+
+// The repertoire's groups (the student's folders of lines)
+route('POST', '/api/repertoire/groups', ({ body }) => {
+  const { color, name } = obj(body);
+  return createRepertoireGroup(color, name);
+});
+route('POST', '/api/repertoire/groups/:id', ({ params, body }) => renameRepertoireGroup(params.id, obj(body).name));
+route('DELETE', '/api/repertoire/groups/:id', ({ params, query }) => deleteRepertoireGroup(params.id, { keepLines: query.keep === '1' }));
+/** Takes a line out of a group (its moves stay in the repertoire): body { key, uci } of the move. */
+route('POST', '/api/repertoire/groups/:id/remove', ({ params, body }) => {
+  const { key, uci } = obj(body);
+  return removeFromRepertoireGroup(params.id, String(key || ''), String(uci || ''));
 });
 route('POST', '/api/repertoire/review', ({ body }) => {
   const { id, grade } = obj(body);

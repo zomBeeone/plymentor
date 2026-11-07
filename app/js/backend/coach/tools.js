@@ -3,17 +3,30 @@
 // mcp.cjs -> coach host (main process) -> page -> this worker. Definitions and input validation are shared with the
 // coach host (shared/tools.js). The notes about the student (get/update_player_memory) are answered by the host itself.
 import { getSettings } from '../settings.js';
-import { run, get, now, json } from '../db.js';
-import { posFromFen, fenOf, keyOf, parseMove, playLine, formatLine, moveLabel, moveFromUci, legalMoves, uciOf, initialPos, ChessError, INITIAL_FEN } from '../chess/core.js';
+import { run, get, tx, now, json } from '../db.js';
+import { posFromFen, fenOf, keyOf, parseMove, playLine, formatLine, moveLabel, moveFromUci, legalMoves, uciOf, initialPos, outcomeText, ChessError, INITIAL_FEN } from '../chess/core.js';
 import { describePosition } from '../chess/features.js';
-import { evaluate, describeEval, evaluateMove, describeMoveEval } from '../engine/pool.js';
+import { evaluate, describeEval, evaluateMove, describeMoveEval, PLAY_LEVELS } from '../engine/pool.js';
 import { lookup, bookMoves, bookPathTo, search as searchOpenings } from '../chess/openings.js';
 import { explorer, listGames, getGame, gameSummary, studentColor, myNames, allGameIds } from '../games.js';
 import { playerStats, describeStats } from '../analysis/stats.js';
 import { jobs } from '../analysis/batch.js';
 import { lichessExplorer } from '../online.js';
 import { formatScore } from '../chess/evalmath.js';
-import { addLineToRepertoire, removeFromRepertoire, repertoire, repertoireLines, repertoireStats } from '../training.js';
+import {
+  addLineToRepertoire,
+  removeFromRepertoire,
+  repertoire,
+  repertoireLines,
+  repertoireStats,
+  repertoireGroups,
+  findRepertoireGroup,
+  createRepertoireGroup,
+  renameRepertoireGroup,
+  deleteRepertoireGroup,
+  removeFromRepertoireGroup,
+  otherRepertoireMoves,
+} from '../training.js';
 import { createReport } from '../reports.js';
 import { describeAppState, ENGINE_SCREENS } from './state.js';
 import { toolDef, validate, HOST_TOOLS, SCREENS, ENGINE_LABELS } from '../../../../shared/tools.js';
@@ -65,6 +78,25 @@ function pathOnBoard(screen, key) {
     }
   }
   return null;
+}
+
+/** A repertoire line (its rows from the initial position) with move numbers and the notes on its moves. */
+function repertoireLineText(line) {
+  return line
+    .map((e, i) => {
+      const [, turn, , , , n] = e.fen.split(' ');
+      const note = e.comment ? ` {${e.comment.length > 300 ? `${e.comment.slice(0, 300)}…` : e.comment}}` : '';
+      return `${turn === 'w' ? `${n}. ` : i === 0 ? `${n}... ` : ''}${e.san}${note}`;
+    })
+    .join(' ');
+}
+
+/** A group of the student's repertoire by name, or the error that lists the groups there are. */
+function groupNamed(color, name) {
+  const g = findRepertoireGroup(color, name);
+  if (g) return g;
+  const names = repertoireGroups(color).map(x => `"${x.name}"`);
+  throw new ToolError(`The student's ${color} repertoire has no group called "${name}"${names.length ? `; its groups: ${names.join(', ')}` : ' (it has no groups)'}.`);
 }
 
 /** What the coach reads about a batch analysis (jobs.status). */
@@ -415,34 +447,66 @@ const executors = {
     return `Exercise saved to the training deck (id ${id}). Solution: ${formatLine(pos, r.steps.map(s => s.san))}.`;
   },
 
-  async get_repertoire({ color }) {
+  async get_repertoire({ color, group }) {
     const st = repertoireStats(color);
-    if (!st.moves) return `The student's ${color} repertoire is empty.`;
-    const { lines, truncated } = repertoireLines(color);
-    const L = [`The student's ${color} repertoire: ${st.moves} moves, ${st.studentMoves} of them ${color}'s (${st.due} due for review). Its lines from the initial position:`];
-    for (const line of lines)
+    const entries = repertoire(color);
+    const groups = repertoireGroups(color, entries);
+    const only = group === undefined ? null : groups.find(g => g.id === groupNamed(color, group).id);
+    if (!st.moves && !groups.length) return `The student's ${color} repertoire is empty.`;
+    const L = [];
+    let room = 80; // lines listed in all
+    const list = moves => {
+      if (!moves.length) return void L.push('(no lines yet)');
+      if (room <= 0) return void L.push('(lines not listed: the list is long enough)');
+      const { lines, truncated } = repertoireLines(color, room, moves);
+      room -= lines.length;
+      for (const line of lines) L.push(`- ${repertoireLineText(line)}`);
+      if (truncated) L.push(`(and more lines: only the first ${lines.length} are listed)`);
+    };
+    const counts = g => `${g.moves} move${g.moves === 1 ? '' : 's'}, ${g.studentMoves} of them ${color}'s, ${g.due} due`;
+    const inGroup = g => entries.filter(e => e.groups.includes(g.id));
+    if (only) {
+      L.push(`The student's ${color} repertoire, group "${only.name}" (${counts(only)}) — its lines from the initial position:`);
+      list(inGroup(only));
+    } else if (!groups.length) {
+      L.push(`The student's ${color} repertoire: ${st.moves} moves, ${st.studentMoves} of them ${color}'s (${st.due} due for review). Its lines from the initial position:`);
+      list(entries);
+    } else {
       L.push(
-        `- ${line
-          .map((e, i) => {
-            const [, turn, , , , n] = e.fen.split(' ');
-            return `${turn === 'w' ? `${n}. ` : i === 0 ? `${n}... ` : ''}${e.san}${e.comment ? ` {${e.comment}}` : ''}`;
-          })
-          .join(' ')}`,
+        `The student's ${color} repertoire: ${st.moves} moves, ${st.studentMoves} of them ${color}'s (${st.due} due for review), in ${groups.length} group${groups.length === 1 ? '' : 's'} — each group's lines from the initial position, then the lines in no group:`,
       );
-    if (truncated) L.push(`(and more lines: only the first ${lines.length} are listed)`);
+      for (const g of groups) {
+        L.push(`Group "${g.name}" (${counts(g)}):`);
+        list(inGroup(g));
+      }
+      const other = otherRepertoireMoves(entries);
+      if (other.length) {
+        L.push('In no group:');
+        list(other);
+      }
+    }
     return L.join('\n');
   },
 
-  async remove_from_repertoire({ color, moves }, ctx) {
+  async remove_from_repertoire({ color, moves, group }, ctx) {
     const r = playLine(INITIAL_FEN, moves);
     if (r.error) throw new ToolError(r.error);
     const last = r.steps.at(-1);
     const key = keyOf(posFromFen(r.steps.length > 1 ? r.steps.at(-2).fen : INITIAL_FEN));
     const label = moveLabel(last.moveNumber, last.color, last.san);
     const entries = repertoire(color);
-    if (!entries.some(e => e.key === key && e.uci === last.uci)) {
-      const there = entries.filter(e => e.key === key).map(e => e.san);
-      throw new ToolError(`${label} is not in the student's ${color} repertoire after ${r.steps.length > 1 ? formatLine(initialPos(), r.steps.slice(0, -1).map(s => s.san)) : 'the initial position'}${there.length ? `; there it has ${there.join(', ')}` : ''}. get_repertoire shows its lines.`);
+    const g = group === undefined ? null : groupNamed(color, group);
+    const among = g ? entries.filter(e => e.groups.includes(g.id)) : entries;
+    if (!among.some(e => e.key === key && e.uci === last.uci)) {
+      const there = among.filter(e => e.key === key).map(e => e.san);
+      throw new ToolError(
+        `${label} is not in ${g ? `the group "${g.name}" of ` : ''}the student's ${color} repertoire after ${r.steps.length > 1 ? formatLine(initialPos(), r.steps.slice(0, -1).map(s => s.san)) : 'the initial position'}${there.length ? `; there it has ${there.join(', ')}` : ''}. get_repertoire shows its lines.`,
+      );
+    }
+    if (g) {
+      const { taken } = removeFromRepertoireGroup(g.id, key, last.uci);
+      ctx.emit({ type: 'ui', action: 'repertoire_updated', color });
+      return `Took ${label} out of the group "${g.name}" of the student's ${color} repertoire, with the line it is on: ${taken === 1 ? '1 move left the group and stays' : `${taken} moves left the group and stay`} in the repertoire.`;
     }
     removeFromRepertoire(color, key, last.uci);
     const removed = entries.length - repertoire(color).length;
@@ -450,15 +514,87 @@ const executors = {
     return `Removed ${label} from the student's ${color} repertoire, with what followed it: ${removed} move${removed === 1 ? '' : 's'} in all.`;
   },
 
-  async add_to_repertoire({ color, moves, comment }, ctx) {
+  async add_to_repertoire({ color, moves, comment, group }, ctx) {
     let r;
+    let made = false;
     try {
-      r = addLineToRepertoire(color, moves, comment ? String(comment).slice(0, 500) : comment);
+      r = tx(() => {
+        let g = null;
+        if (group !== undefined) {
+          g = findRepertoireGroup(color, group);
+          if (!g) {
+            g = createRepertoireGroup(color, group);
+            made = true;
+          }
+        }
+        return addLineToRepertoire(color, moves, comment ? String(comment).slice(0, 500) : comment, { group: g?.id });
+      });
     } catch (e) {
       throw new ToolError(e.message);
     }
     ctx.emit({ type: 'ui', action: 'repertoire_updated', color });
-    return `Added to the ${color} repertoire: ${r.line} (${r.added} new moves).`;
+    return `Added to the ${color} repertoire${r.group ? `, in the group "${r.group.name}"${made ? ' (a new group)' : ''}` : ''}: ${r.line} (${r.added} new moves).`;
+  },
+
+  async edit_repertoire_group({ color, action, group, new_name, keep_lines = false }, ctx) {
+    const done = text => {
+      ctx.emit({ type: 'ui', action: 'repertoire_updated', color });
+      return text;
+    };
+    try {
+      if (action === 'create') {
+        const g = createRepertoireGroup(color, group);
+        return done(`Made the group "${g.name}" in the student's ${color} repertoire. Lines go into it with add_to_repertoire (group "${g.name}").`);
+      }
+      const g = groupNamed(color, group);
+      if (action === 'rename') {
+        if (new_name === undefined) throw new ToolError('Give new_name, the group’s new name.');
+        const r = renameRepertoireGroup(g.id, new_name);
+        return done(`Renamed the group "${g.name}" of the student's ${color} repertoire to "${r.name}".`);
+      }
+      const { removed } = deleteRepertoireGroup(g.id, { keepLines: keep_lines });
+      return done(
+        keep_lines
+          ? `Deleted the group "${g.name}" of the student's ${color} repertoire; its lines stay in the repertoire (in no group, unless they are in other groups too).`
+          : `Deleted the group "${g.name}" of the student's ${color} repertoire, with its lines: ${removed} move${removed === 1 ? '' : 's'} left the repertoire (the moves other lines need stay).`,
+      );
+    } catch (e) {
+      throw e instanceof ToolError ? e : new ToolError(e.message);
+    }
+  },
+
+  async start_training_game({ fen, moves_from_start: fromStart, color, level, comments = 'mistakes', goal }, ctx) {
+    let pos;
+    let path = null;
+    if (fromStart) {
+      const r = playLine(INITIAL_FEN, fromStart);
+      if (r.error) throw new ToolError(`moves_from_start: ${r.error}`);
+      if (fen && keyOf(safePos(fen)) !== keyOf(r.pos))
+        throw new ToolError(`moves_from_start lead to ${r.fen}, not to the fen you gave (${fenOf(safePos(fen))}). Check the moves with play_moves, or leave fen out.`);
+      pos = r.pos;
+      path = r.steps;
+    } else pos = safePos(fen);
+    const over = outcomeText(pos);
+    if (over) throw new ToolError(`The game is already over in that position (${over}): give one with moves to play.`);
+    const side = color || pos.turn;
+    const strength = level ? PLAY_LEVELS.find(l => l.id === level) : null;
+    const aim = goal ? goal.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
+    ctx.emit({
+      type: 'ui',
+      action: 'start_game',
+      fen: fenOf(pos),
+      path: path ? path.map(s => ({ uci: s.uci, san: s.san })) : null,
+      color: side,
+      level: strength?.id ?? null,
+      comments,
+      goal: aim || null,
+    });
+    const from = path ? `the position after ${formatLine(initialPos(), path.map(s => s.san))}` : keyOf(pos) === keyOf(initialPos()) ? 'the initial position' : `the position ${fenOf(pos)}`;
+    return [
+      `Started a training game on the student's Board screen: they play ${side} against Stockfish (${strength ? strength.label : 'the strength they last chose for a game'}) from ${from}${aim ? `; the goal shown to them: ${aim}` : ''}. ${pos.turn === side ? 'It is their move.' : 'Stockfish moves first.'}`,
+      comments === 'off' ? 'You are not asked about their moves during the game.' : comments === 'all' ? 'You are asked to comment on each of their moves as they play.' : 'You are asked to comment on their mistakes as they play.',
+      'When the game ends you get a message with the result: review it with them then (get_board_state shows the game). A training game they were in the middle of is paused: they can go back to it.',
+    ].join(' ');
   },
 
   async get_board_state(_input, ctx) {

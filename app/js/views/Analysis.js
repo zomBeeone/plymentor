@@ -4,11 +4,11 @@ import { html, useEffect, useState } from '../../vendor/preact.js';
 import { api, get, post, qs } from '../api.js';
 import { state, toast, useStore, coachReady } from '../store.js';
 import { BoardCtrl, useCtrl, useBoardKeys, useMedia, useForce } from '../ctrl.js';
-import { Tree, placeCoachPosition } from '../tree.js';
+import { Tree, placeCoachPosition, commentsOf } from '../tree.js';
 import { engine, useLiveEval, engineSwitches, setEngineSwitch, useEngineSwitch } from '../engine.js';
 import { Board, glyphShape } from '../components/Board.js';
 import { EvalBar } from '../components/EvalBar.js';
-import { MoveList } from '../components/MoveList.js';
+import { MoveList, MoveComment } from '../components/MoveList.js';
 import { EnginePanel } from '../components/EnginePanel.js';
 import { Explorer } from '../components/Explorer.js';
 import { useCoachHandle } from '../components/coachHandle.js';
@@ -163,7 +163,7 @@ function restoreStash() {
   ui.play = st.play || null;
   resetOverlays();
   if (st.orientation) ctrl.orientation = st.orientation;
-  ctrl.setTree(st.tree, st.play ? st.play.tip : st.node);
+  ctrl.setTree(st.tree, st.play && !st.play.result ? st.play.tip : st.node);
   const p = ui.play;
   if (p && !p.result && !p.thinking && turnOf(p.tip.fen) !== p.color) setTimeout(() => engineMove(p), 300);
 }
@@ -179,6 +179,7 @@ function contextFor(node, coach) {
     engine: live?.lines?.length ? { depth: live.depth, lines: live.lines.map(l => ({ score: l.score, pv: (l.pv || []).slice(0, 12) })) } : undefined,
     lastMove: node.judge ? { san: node.san, classification: node.judge.classification, best: node.judge.best, scoreAfter: node.judge.scoreAfter } : undefined,
     lastComment: coach?.lastNote?.() || undefined,
+    comment: commentsOf(node).join(' ').slice(0, 1000) || undefined,
   };
 }
 
@@ -191,7 +192,7 @@ function playContext(node, p) {
     mode: 'play',
     startFen: p.tree.isStandardStart ? undefined : p.tree.startFen,
     ucis: p.tree.ucis(node),
-    play: { level: p.levelLabel, color: p.color },
+    play: { level: p.levelLabel, color: p.color, byCoach: p.byCoach || undefined, goal: p.goal || undefined },
     lastMove: node.judge ? { san: node.san, classification: node.judge.classification, best: node.judge.best, scoreAfter: node.judge.scoreAfter } : undefined,
     note: p.result
       ? `The training game is over: ${p.result.result} (${p.result.reason}).`
@@ -202,22 +203,57 @@ function playContext(node, p) {
 }
 
 const studentToMove = p => !!p && !p.result && !p.thinking && turnOf(p.tip.fen) === p.color;
-const canTakeBack = p => !!p && !p.thinking && p.tree.path(p.tip).some(n => n.color === p.color);
+// (the moves before the game's first position, an opening the coach played out, are not taken back)
+const canTakeBack = p => !!p && !p.thinking && p.tree.path(p.tip).slice(p.tree.path(p.start).length).some(n => n.color === p.color);
 
-function startGame({ color, level, levelLabel, coachMode, fen }) {
-  if (!ui.play && (ui.gameId || ctrl.tree.root.children.length)) pushStash(ui.gameId ? 'the game' : 'your analysis');
-  if (ui.play) ui.play.stopped = true; // a new game replaces the one on the board
-  const tree = new Tree(fen);
-  const p = { color, level, levelLabel, coachMode, tree, tip: tree.root, result: null, thinking: false, stopped: false };
+/**
+ * A new training game. tree/start: the game begins at that node of a tree (after an opening's moves), otherwise at
+ * `fen`. byCoach: the coach started it (start_training_game) — whatever was on the board waits behind "↩ Back to …",
+ * a game in progress too; goal: what the coach asked the student to aim for.
+ */
+function startGame({ color, level, levelLabel, coachMode, fen, tree: given = null, start = null, goal = null, byCoach = false }) {
+  if (byCoach && (ui.play || ui.gameId || ctrl.tree.root.children.length)) pushStash(ui.play ? (ui.play.result ? 'your last game' : 'your game') : ui.gameId ? 'the game' : 'your analysis');
+  else if (!ui.play && (ui.gameId || ctrl.tree.root.children.length)) pushStash(ui.gameId ? 'the game' : 'your analysis');
+  else if (ui.play) ui.play.stopped = true; // a new game replaces the one on the board
+  const tree = given || new Tree(fen);
+  const tip = start || tree.root;
+  const p = { color, level, levelLabel, coachMode, tree, start: tip, tip, result: null, thinking: false, stopped: false, goal, byCoach };
   ui.play = p;
   ui.game = null;
   ui.gameId = null;
   resetOverlays();
   ctrl.orientation = color;
-  ctrl.setTree(tree);
+  ctrl.setTree(tree, tip);
   setCoachKey(`analysis.play.${Date.now()}`);
   ui.coach?.newThread?.();
-  if (!checkEnd(p) && turnOf(fen) !== color) setTimeout(() => engineMove(p), 400);
+  if (!checkEnd(p) && turnOf(tip.fen) !== color) setTimeout(() => engineMove(p), 400);
+}
+
+/**
+ * The coach makes the student play (start_training_game): from its position, or after the moves of an opening (they
+ * stay in the move list), at the strength it chose — or the one the student last chose.
+ */
+async function startCoachGame(ev) {
+  const pos = tryPos(ev.fen);
+  if (!pos) return;
+  let tree = new Tree();
+  let start = ev.path?.length ? tree.addLine(tree.root, ev.path.map(m => m.uci)) : tree.root;
+  if (repKey(start.fen) !== repKey(fenOf(pos))) {
+    tree = new Tree(fenOf(pos));
+    start = tree.root;
+  }
+  levels ||= await get('/api/engine/levels').catch(() => null);
+  const level = Number(ev.level) || Number(stored('play.level', 5));
+  startGame({
+    color: ev.color === 'black' ? 'black' : 'white',
+    level,
+    levelLabel: levels?.find(l => l.id === level)?.label || `level ${level}`,
+    coachMode: ['mistakes', 'all', 'off'].includes(ev.comments) ? ev.comments : 'mistakes',
+    tree,
+    start,
+    goal: ev.goal ? String(ev.goal).slice(0, 200) : null,
+    byCoach: true,
+  });
 }
 
 async function engineMove(p) {
@@ -281,8 +317,9 @@ function endGame(p, over) {
   const won = (over.result === '1-0' && p.color === 'white') || (over.result === '0-1' && p.color === 'black');
   sound(over.result === '1/2-1/2' ? 'Draw' : won ? 'Victory' : 'Defeat');
   ctrl.emit();
-  if (coachReady() && p.coachMode !== 'off')
-    ui.coach?.send?.('The game is over.', { task: 'gameEnd', taskArgs: { result: `${over.result}, ${over.reason}` }, label: `Game over: ${over.result} (${over.reason})` });
+  // (the coach hears of the end of a game it started even when it was not to comment on the moves)
+  if (coachReady() && (p.coachMode !== 'off' || p.byCoach))
+    ui.coach?.send?.('The game is over.', { task: 'gameEnd', taskArgs: { result: `${over.result}, ${over.reason}`, goal: p.goal }, label: `Game over: ${over.result} (${over.reason})` });
 }
 
 /** Takes back the student's last move (and the engine's reply to it). */
@@ -290,7 +327,7 @@ function takeback() {
   const p = ui.play;
   if (!canTakeBack(p)) return;
   let n = p.tip;
-  while (n.parent) {
+  while (n.parent && n !== p.start) {
     const parent = n.parent;
     const mine = n.color === p.color;
     p.tree.remove(n);
@@ -390,7 +427,7 @@ export function Analysis({ route }) {
         ? playContext(ctrl.node, ui.play)
         : { ...contextFor(ctrl.node, coach), question: ui.question && repKey(ui.question.fen) === repKey(ctrl.node.fen) ? true : undefined },
     ev => {
-      if (ev.action === 'set_board') onUi(ev);
+      if (ev.action === 'set_board' || ev.action === 'start_game') onUi(ev);
       else if (ev.action === 'open_game') {
         if (ui.play && !ui.play.result && !confirm('Your coach wants to open one of your games. Pause your training game? You can go back to it afterwards.')) return true;
         loadGame(ev.gameId, ev.ply, () => {
@@ -458,8 +495,12 @@ export function Analysis({ route }) {
     if (!r.node.judge) judge(parent, r.node);
   }
 
-  /** The coach shows a position (set_board). During a training game it draws on the game, or pauses the game. */
+  /**
+   * The coach shows a position (set_board) — during a training game it draws on the game, or pauses the game — or
+   * makes the student play one (start_game).
+   */
   function onUi(ev) {
+    if (ev.action === 'start_game') return void startCoachGame(ev);
     if (ev.action !== 'set_board') return;
     const g0 = ui.play;
     if (g0 && !g0.result) {
@@ -515,6 +556,7 @@ export function Analysis({ route }) {
   const best = live?.lines?.[0]?.pv?.[0];
   if (!p && engineOn && best && s.settings?.board?.bestArrow !== false) shapes.push({ orig: best.slice(0, 2), dest: best.slice(2, 4), brush: 'paleBlue' });
   if (ui.coachShapes && repKey(ui.coachShapes.fen) === repKey(node.fen)) shapes.push(...ui.coachShapes.shapes);
+  if (!p && node.shapes.length) shapes.push(...node.shapes); // the arrows and circles of the PGN's comments
   if (node.judge?.classification && node.uci && (!p || node.color === p.color)) shapes.push(glyphShape(node.uci.slice(2, 4), node.judge.classification));
   const caption = ui.caption && repKey(ui.caption.fen) === repKey(node.fen) ? ui.caption.text : null;
   const asking = !p && ui.question && repKey(ui.question.fen) === repKey(node.fen);
@@ -536,7 +578,7 @@ export function Analysis({ route }) {
         yourMove ? { label: 'Hint', task: 'hint' } : null,
         { label: 'What is my plan?', task: 'plan' },
         { label: 'Threats?', task: 'threats' },
-        p.result ? { label: 'Review my game', task: 'gameEnd', taskArgs: () => ({ result: `${p.result.result}, ${p.result.reason}` }) } : null,
+        p.result ? { label: 'Review my game', task: 'gameEnd', taskArgs: () => ({ result: `${p.result.result}, ${p.result.reason}`, goal: p.goal }) } : null,
       ].filter(Boolean)
     : [
         { label: 'Explain position', task: 'explain' },
@@ -582,6 +624,7 @@ export function Analysis({ route }) {
   />`;
 
   const moves = html`<${MoveList} tree=${ctrl.tree} current=${node} onSelect=${n => ctrl.goto(n)} result=${p ? p.result?.result : g?.result} />`;
+  const comment = !p && html`<${MoveComment} node=${node} />`; // (under the moves: the comment of the move on the board)
   const explorer = html`<${Explorer} fen=${node.fen} line=${ctrl.tree.isStandardStart ? ctrl.tree.ucis(node) : null} onPlay=${onMove} />`;
   const gameTab = html`<${GameTab} game=${g} node=${node} coach=${coach} />`;
   const tabs = [
@@ -603,7 +646,7 @@ export function Analysis({ route }) {
     <div class="workspace">
       <div class="board-col">
         <div class="board-area">
-          ${!p && s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${engineOn || node.score ? scoreForBar : null} orientation=${ctrl.orientation} />`}
+          ${!p && s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${scoreForBar} fen=${node.fen} off=${!engineOn} orientation=${ctrl.orientation} />`}
           <${Board}
             fen=${node.fen}
             orientation=${ctrl.orientation}
@@ -614,7 +657,7 @@ export function Analysis({ route }) {
             banner=${banner}
           />
         </div>
-        ${caption && html`<div class="board-caption">${caption}</div>`}
+        ${caption ? html`<div class="board-caption">${caption}</div>` : p?.goal && html`<div class="board-caption goal"><span class="muted">Your coach's goal:</span> ${p.goal}</div>`}
         <div class="board-controls">
           <button class="btn icon" title="First (↑)" onClick=${() => ctrl.first()}>⏮</button>
           <button class="btn icon" title="Back (←)" onClick=${() => ctrl.prev()}>◀</button>
@@ -649,6 +692,7 @@ export function Analysis({ route }) {
             <div class="panel grow">
               <div class="panel-head"><div class="tabs">${tabs.map(([id, label]) => html`<button class=${cls('tab', ui.tab === id && 'active')} onClick=${() => setTab(id)}>${label}</button>`)}</div></div>
               <div class="panel-body">${ui.tab === 'moves' ? moves : ui.tab === 'explorer' ? explorer : gameTab}</div>
+              ${ui.tab === 'moves' && comment}
             </div>`}
       </div>`}
       <div class="side-col">
@@ -658,7 +702,7 @@ export function Analysis({ route }) {
         </div></div></div>`}
         ${!compact || compactTab === 'coach'
           ? html`<div class="grow" style="min-height:0">${coachPanel}</div>`
-          : html`<div class="panel grow"><div class="panel-body">${compactTab === 'moves' ? moves : compactTab === 'engine' ? enginePanel : compactTab === 'explorer' ? explorer : gameTab}</div></div>`}
+          : html`<div class="panel grow"><div class="panel-body">${compactTab === 'moves' ? moves : compactTab === 'engine' ? enginePanel : compactTab === 'explorer' ? explorer : gameTab}</div>${compactTab === 'moves' && comment}</div>`}
       </div>
       ${modal === 'load' && html`<${LoadModal} onClose=${() => setModal(null)} onLoadTree=${loadTree} />`}
       ${modal === 'play' && html`<${PlayModal} onClose=${() => setModal(null)} onStart=${startGame} />`}
@@ -696,7 +740,7 @@ function GameStatus({ p, node, onAnalyse, onNew }) {
   const last = node.color === p.color ? node : node.parent?.color === p.color ? node.parent : null;
   const j = last?.judge;
   if (!j)
-    return html`<div class="judgement"><span class="muted">${p.tip.ply ? 'Your moves are judged by Stockfish as you play.' : `New game vs ${p.levelLabel} — you play ${p.color}.`}</span></div>`;
+    return html`<div class="judgement"><span class="muted">${p.tip !== p.start ? 'Your moves are judged by Stockfish as you play.' : `New game vs ${p.levelLabel} — you play ${p.color}.`}</span></div>`;
   const c = j.classification || 'good';
   return html`<div class=${cls('judgement', c)}><span class="tag">${JUDGEMENT_LABEL[c] || 'Good'}</span>
     <span>${last.label} <span class="muted">(${formatScore(j.scoreAfter)})</span>${BAD.includes(c) && j.best?.san && j.best.san !== last.san ? html` · better was <b>${j.best.san}</b>` : ''}</span></div>`;

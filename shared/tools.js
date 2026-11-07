@@ -292,10 +292,13 @@ export const TOOL_DEFS = [
     name: 'get_repertoire',
     readOnly: true,
     description:
-      "The student's White or Black opening repertoire (the tree they drill in Openings → Repertoire): every line from the initial position, with the notes on its moves, and how many of their moves are due for review. Read it before you suggest changes to it.",
+      "The student's White or Black opening repertoire (the tree they drill in Openings → Repertoire): its groups — the student's folders of lines, e.g. \"French\", each drilled on its own or with the rest —, every line from the initial position (group by group, then the lines in no group) with the notes on its moves, and how many of their moves are due for review. Read it before you suggest changes to it.",
     input_schema: {
       type: 'object',
-      properties: { color: { type: 'string', enum: ['white', 'black'], description: 'Which repertoire (the side the student plays).' } },
+      properties: {
+        color: { type: 'string', enum: ['white', 'black'], description: 'Which repertoire (the side the student plays).' },
+        group: { type: 'string', description: 'Only the lines of this group (its name).' },
+      },
       required: ['color'],
       additionalProperties: false,
     },
@@ -303,13 +306,14 @@ export const TOOL_DEFS = [
   {
     name: 'add_to_repertoire',
     description:
-      "Add an opening line to the student's repertoire (their White or Black repertoire tree) so they can drill it. The line is given in SAN from the initial position. Only use it when the student wants the line.",
+      "Add an opening line to the student's repertoire (their White or Black repertoire tree) so they can drill it. The line is given in SAN from the initial position. With group, the line — and what the repertoire has after its last move — goes into that group of the student's (made when there is none of that name): keep an opening's lines together, e.g. in \"French\". A line already in the repertoire is put into a group the same way. Only use it when the student wants the line.",
     input_schema: {
       type: 'object',
       properties: {
         color: { type: 'string', enum: ['white', 'black'], description: 'Which repertoire (the side the student plays).' },
         moves: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 40 },
         comment: { type: 'string' },
+        group: { type: 'string', description: 'The group it goes into, by name (e.g. "French"); made when the student has none of that name.' },
       },
       required: ['color', 'moves'],
       additionalProperties: false,
@@ -318,14 +322,65 @@ export const TOOL_DEFS = [
   {
     name: 'remove_from_repertoire',
     description:
-      'Remove a move from the student\'s White or Black repertoire, with everything that follows it (the moves no other line leads to). Give the line from the initial position up to and including the move to remove, in SAN: ["e4", "e5", "f4"] removes 2. f4 and its continuations, ["e4"] the whole 1. e4 part. Only use it when the student wants it.',
+      'Remove a move from the student\'s White or Black repertoire, with everything that follows it (the moves no other line leads to). Give the line from the initial position up to and including the move to remove, in SAN: ["e4", "e5", "f4"] removes 2. f4 and its continuations, ["e4"] the whole 1. e4 part. With group, the line only leaves that group: its moves stay in the repertoire (in their other groups, or in none). Only use it when the student wants it.',
     input_schema: {
       type: 'object',
       properties: {
         color: { type: 'string', enum: ['white', 'black'], description: 'Which repertoire.' },
         moves: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 40, description: 'The line from the initial position; its last move is removed.' },
+        group: { type: 'string', description: 'Only take the line out of this group (its name).' },
       },
       required: ['color', 'moves'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'edit_repertoire_group',
+    description:
+      "Make, rename or delete a group of the student's White or Black repertoire (their folders of lines, e.g. \"French\"). Deleting a group deletes its lines too — the moves that no other group or line needs — unless keep_lines is true: then they stay in the repertoire, in no group. Lines go into a group with add_to_repertoire. Only use it when the student wants it.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        color: { type: 'string', enum: ['white', 'black'], description: 'Which repertoire.' },
+        action: { type: 'string', enum: ['create', 'rename', 'delete'] },
+        group: { type: 'string', description: "The group's name (to create: the new group's)." },
+        new_name: { type: 'string', description: 'To rename: its new name.' },
+        keep_lines: { type: 'boolean', description: 'To delete: keep its lines in the repertoire, in no group (default false).' },
+      },
+      required: ['color', 'action', 'group'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'start_training_game',
+    description:
+      "Make the student play it out against Stockfish: starts a training game on their Board screen (the app goes there) — a whole game from the initial position, an opening from its moves, or any position: an endgame to win or to hold, a middlegame plan to carry out, a defence to find. Their moves are judged as they play, Stockfish's analysis stays hidden, and a game in progress is paused (they can go back to it). You are asked to comment on their mistakes (or on every move, or on none — comments), and you get a message with the result when the game ends: review it then. Use it when playing a position out teaches more than talking about it, and tell the student what to aim for (goal).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        fen: { type: 'string', description: 'The starting position (full FEN, 6 fields). Leave out, with moves_from_start, for the initial position.' },
+        moves_from_start: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 200,
+          description: 'Or the moves from the initial position that lead to the starting position (SAN or UCI), e.g. an opening line to play on from.',
+        },
+        color: { type: 'string', enum: ['white', 'black'], description: "The student's side (default: the side to move)." },
+        level: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 11,
+          description:
+            "Stockfish's strength: 1 Beginner, 2 Novice, 3 Casual (~1300), 4 Club 1500, 5 Club 1700, 6 Strong 1900, 7 Expert 2100, 8 Master 2300, 9 IM 2500, 10 Super GM 2800, 11 Full strength (default: the strength the student last chose for a game).",
+        },
+        comments: {
+          type: 'string',
+          enum: ['mistakes', 'all', 'off'],
+          description: "Which of the student's moves you are asked to comment on while they play: their mistakes (default), every move, or none (you review the game at the end).",
+        },
+        goal: { type: 'string', description: 'What the student should aim for, shown under the board during the game, e.g. "Win with the extra pawn" or "Hold the draw".' },
+      },
       additionalProperties: false,
     },
   },
@@ -422,7 +477,7 @@ export const MCP_TOOLS = TOOL_DEFS.map(t => ({
   name: t.name,
   description: t.description,
   inputSchema: t.input_schema,
-  annotations: t.readOnly ? { readOnlyHint: true } : { readOnlyHint: false, destructiveHint: ['save_report', 'update_player_memory', 'remove_from_repertoire'].includes(t.name) },
+  annotations: t.readOnly ? { readOnlyHint: true } : { readOnlyHint: false, destructiveHint: ['save_report', 'update_player_memory', 'remove_from_repertoire', 'edit_repertoire_group'].includes(t.name) },
 }));
 
 export const toolDef = name => TOOL_DEFS.find(t => t.name === name) || null;
@@ -509,7 +564,10 @@ export function toolLabel(name, input) {
       return `Reading your ${input?.color === 'black' ? 'Black' : 'White'} repertoire`;
     case 'add_to_repertoire':
     case 'remove_from_repertoire':
+    case 'edit_repertoire_group':
       return 'Updating your repertoire';
+    case 'start_training_game':
+      return 'Starting a game against Stockfish';
     case 'get_player_memory':
       return 'Reading my notes about you';
     case 'update_player_memory':

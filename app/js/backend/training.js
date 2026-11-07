@@ -1,5 +1,5 @@
-// Repertoire trees, spaced repetition, and exercises generated from the student's mistakes.
-import { parsePgn, startingPosition } from 'chessops/pgn';
+// Repertoire trees and their groups, spaced repetition, and exercises generated from the student's mistakes.
+import { parsePgn, parseComment, startingPosition } from 'chessops/pgn';
 import { parseSan, makeSan } from 'chessops/san';
 import { run, get, all, tx, now, json } from './db.js';
 import { initialPos, fenOf, keyOf, playLine, formatLine, moveFromUci, uciOf, posFromFen, INITIAL_FEN } from './chess/core.js';
@@ -33,10 +33,76 @@ export function schedule(item, grade) {
 // ---------------------------------------------------------------------------------------------
 // Repertoire
 
-export function addLineToRepertoire(color, moves, comment) {
-  if (color !== 'white' && color !== 'black') throw new Error('color must be white or black');
+const badRequest = message => Object.assign(new Error(message), { status: 400 });
+
+function checkColor(color) {
+  if (color !== 'white' && color !== 'black') throw badRequest('color must be white or black');
+}
+
+/** Moves by the position they are played in. */
+function byPosition(entries) {
+  const m = new Map();
+  for (const e of entries) {
+    if (!m.has(e.key)) m.set(e.key, []);
+    m.get(e.key).push(e);
+  }
+  return m;
+}
+
+/**
+ * The ids of the moves of `entries` that `keep` takes and of the moves that lead to them from the initial position (a
+ * move no line from the initial position reaches is in neither).
+ */
+function movesLeadingTo(entries, keep) {
+  const at = byPosition(entries);
+  const known = new Map(); // position key -> whether a kept move is reached from it
+  const ids = new Set();
+  const visit = (pos, way) => {
+    const k = keyOf(pos);
+    if (known.has(k)) return known.get(k);
+    if (way.has(k)) return false; // (a repetition: nothing new that way)
+    way.add(k);
+    let any = false;
+    for (const e of at.get(k) || []) {
+      const move = moveFromUci(pos, e.uci);
+      if (!move) continue;
+      const next = pos.clone();
+      next.play(move);
+      if (visit(next, way) || keep(e)) {
+        ids.add(e.id);
+        any = true;
+      }
+    }
+    way.delete(k);
+    known.set(k, any);
+    return any;
+  };
+  visit(initialPos(), new Set());
+  return ids;
+}
+
+/** Removes the moves of a repertoire that no line from the initial position reaches any more. */
+function pruneUnreachable(color) {
+  const entries = repertoire(color);
+  const reachable = movesLeadingTo(entries, () => true);
+  for (const e of entries) if (!reachable.has(e.id)) run('DELETE FROM repertoire WHERE id = ?', e.id);
+}
+
+/** A PGN move's notes: the comments before and after it, without their [%…] commands (clocks, arrows). */
+function pgnNote(data) {
+  const text = [...(data.startingComments || []), ...(data.comments || [])]
+    .map(c => parseComment(c).text.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ');
+  return text ? text.slice(0, 2000) : null;
+}
+
+export function addLineToRepertoire(color, moves, comment, { group = null } = {}) {
+  checkColor(color);
   const r = playLine(INITIAL_FEN, moves);
-  if (r.error) throw new Error(r.error);
+  if (r.error) throw badRequest(r.error);
+  const g = group ? repertoireGroup(group) : null;
+  if (group && g?.color !== color) throw badRequest('There is no such group.');
   let added = 0;
   const pos = initialPos();
   tx(() => {
@@ -55,8 +121,9 @@ export function addLineToRepertoire(color, moves, comment) {
       added += res.changes;
       pos.play(moveFromUci(pos, s.uci));
     });
+    if (g) putInGroup(g.id, color, r.steps.map(s => s.uci));
   });
-  return { added, line: formatLine(initialPos(), r.steps.map(s => s.san)) };
+  return { added, line: formatLine(initialPos(), r.steps.map(s => s.san)), group: g };
 }
 
 /** Adds a single move at a position (used when building the repertoire on the board). */
@@ -77,51 +144,27 @@ export function addMoveToRepertoire(color, fen, uci, comment) {
   );
 }
 
+/** A repertoire's moves, each with `groups`: the ids of the groups it is in. */
 export function repertoire(color) {
-  return all('SELECT * FROM repertoire WHERE color = ? ORDER BY id', color);
+  return all('SELECT r.*, (SELECT group_concat(m.group_id) FROM repertoire_group_moves m WHERE m.move_id = r.id) AS group_ids FROM repertoire r WHERE r.color = ? ORDER BY r.id', color).map(
+    ({ group_ids, ...e }) => ({ ...e, groups: group_ids ? String(group_ids).split(',').map(Number) : [] }),
+  );
 }
 
 /** Removes a move and every repertoire position that is no longer reachable from the start. */
 export function removeFromRepertoire(color, key, uci) {
   tx(() => {
     run('DELETE FROM repertoire WHERE color = ? AND key = ? AND uci = ?', color, key, uci);
-    const entries = repertoire(color);
-    const byKey = new Map();
-    for (const e of entries) {
-      if (!byKey.has(e.key)) byKey.set(e.key, []);
-      byKey.get(e.key).push(e);
-    }
-    const reachable = new Set();
-    const queue = [initialPos()];
-    const seen = new Set();
-    while (queue.length) {
-      const pos = queue.shift();
-      const k = keyOf(pos);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      for (const e of byKey.get(k) || []) {
-        reachable.add(e.id);
-        const m = moveFromUci(pos, e.uci);
-        if (!m) continue;
-        const next = pos.clone();
-        next.play(m);
-        queue.push(next);
-      }
-    }
-    for (const e of entries) if (!reachable.has(e.id)) run('DELETE FROM repertoire WHERE id = ?', e.id);
+    pruneUnreachable(color);
   });
 }
 
 /**
  * The repertoire's lines from the initial position, each a list of its rows (move, notes): { lines, truncated } — at
- * most `limit` lines (a transposition ends a line).
+ * most `limit` lines (a transposition ends a line). entries: the moves to follow (a group's, say; default all).
  */
-export function repertoireLines(color, limit = 80) {
-  const byKey = new Map();
-  for (const e of repertoire(color)) {
-    if (!byKey.has(e.key)) byKey.set(e.key, []);
-    byKey.get(e.key).push(e);
-  }
+export function repertoireLines(color, limit = 80, entries = repertoire(color)) {
+  const byKey = byPosition(entries);
   const lines = [];
   let truncated = false;
   const walk = (pos, path, seen) => {
@@ -142,9 +185,16 @@ export function repertoireLines(color, limit = 80) {
   return { lines, truncated };
 }
 
-/** Imports every line (variations included) of a PGN into a repertoire. */
-export function importRepertoirePgn(color, text) {
+/**
+ * Imports every line (variations included) of a PGN into a repertoire, its comments as the moves' notes (a move already
+ * there keeps its note, or takes this one when it had none). group: the id of a group the PGN's moves go into.
+ */
+export function importRepertoirePgn(color, text, { group = null } = {}) {
+  checkColor(color);
+  const g = group ? repertoireGroup(group) : null;
+  if (group && g?.color !== color) throw badRequest('There is no such group.');
   let added = 0;
+  const read = new Set(); // "key uci" of every move of the PGN
   tx(() => {
     for (const game of parsePgn(text)) {
       const start = startingPosition(game.headers);
@@ -153,18 +203,23 @@ export function importRepertoirePgn(color, text) {
         for (const child of node.children) {
           const move = parseSan(pos, child.data.san);
           if (!move) continue;
+          const key = keyOf(pos);
+          const uci = uciOf(pos, move);
+          const note = pgnNote(child.data);
           const res = run(
             'INSERT OR IGNORE INTO repertoire (color, key, fen, uci, san, comment, due, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             color,
-            keyOf(pos),
+            key,
             fenOf(pos),
-            uciOf(pos, move),
+            uci,
             makeSan(pos, move),
-            (child.data.comments || []).join(' ').trim() || null,
+            note,
             now(),
             now(),
           );
           added += res.changes;
+          if (!res.changes && note) run(`UPDATE repertoire SET comment = ? WHERE color = ? AND key = ? AND uci = ? AND (comment IS NULL OR comment = '')`, note, color, key, uci);
+          read.add(`${key} ${uci}`);
           const next = pos.clone();
           next.play(move);
           walk(child, next);
@@ -172,8 +227,156 @@ export function importRepertoirePgn(color, text) {
       };
       walk(game.moves, start.value);
     }
+    if (!read.size) throw badRequest('No moves could be read from that PGN.');
+    if (g)
+      for (const e of repertoire(color))
+        if (read.has(`${e.key} ${e.uci}`)) run('INSERT OR IGNORE INTO repertoire_group_moves (group_id, move_id) VALUES (?, ?)', g.id, e.id);
   });
-  return { added };
+  return { added, moves: read.size, group: g };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Repertoire groups: the student's folders of lines ("French", "Against the Sicilian"…). A group's lines start at the
+// initial position; a move can be in several groups, and the lines in none are the repertoire's other lines.
+
+function cleanGroupName(name) {
+  const n = String(name ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!n) throw badRequest('Give the group a name.');
+  if (n.length > 60) throw badRequest('A group’s name can have at most 60 characters.');
+  return n;
+}
+
+export function repertoireGroup(id) {
+  return get('SELECT id, color, name FROM repertoire_groups WHERE id = ?', Number(id)) || null;
+}
+
+/** A group by its name (any case). */
+export function findRepertoireGroup(color, name) {
+  return get('SELECT id, color, name FROM repertoire_groups WHERE color = ? AND name = ?', color, String(name ?? '').replace(/\s+/g, ' ').trim()) || null;
+}
+
+/** A repertoire's groups by name, each with its numbers: { id, name, moves, studentMoves, due }. */
+export function repertoireGroups(color, entries = repertoire(color)) {
+  const t = now();
+  return all('SELECT id, name FROM repertoire_groups WHERE color = ? ORDER BY name COLLATE NOCASE, id', color).map(g => {
+    const moves = entries.filter(e => e.groups.includes(g.id));
+    const mine = moves.filter(e => e.fen.split(' ')[1] === color[0]);
+    return { id: g.id, name: g.name, moves: moves.length, studentMoves: mine.length, due: mine.filter(e => (e.due || 0) <= t).length };
+  });
+}
+
+/** The moves of the lines in no group: those moves, and the ones (of any group) that lead to them. */
+export function otherRepertoireMoves(entries) {
+  const ids = movesLeadingTo(entries, e => !e.groups.length);
+  return entries.filter(e => ids.has(e.id));
+}
+
+export function createRepertoireGroup(color, name) {
+  checkColor(color);
+  const n = cleanGroupName(name);
+  if (findRepertoireGroup(color, n)) throw badRequest(`There is already a group called “${n}”.`);
+  const { id } = run('INSERT INTO repertoire_groups (color, name, created_at) VALUES (?, ?, ?)', color, n, now());
+  return { id, color, name: n };
+}
+
+export function renameRepertoireGroup(id, name) {
+  const g = repertoireGroup(id);
+  if (!g) throw badRequest('There is no such group.');
+  const n = cleanGroupName(name);
+  const other = findRepertoireGroup(g.color, n);
+  if (other && other.id !== g.id) throw badRequest(`There is already a group called “${n}”.`);
+  run('UPDATE repertoire_groups SET name = ? WHERE id = ?', n, g.id);
+  return { ...g, name: n };
+}
+
+/**
+ * Deletes a group. keepLines: its lines stay in the repertoire (in their other groups, or in none); otherwise the moves
+ * only this group had go too — except those that lead to lines that stay (a deleted French's 1. e4 stays when Sicilian
+ * lines in no group begin with it). Returns { removed } (moves).
+ */
+export function deleteRepertoireGroup(id, { keepLines = false } = {}) {
+  const g = repertoireGroup(id);
+  if (!g) throw badRequest('There is no such group.');
+  return tx(() => {
+    const before = repertoire(g.color);
+    const only = new Set(before.filter(e => e.groups.length === 1 && e.groups[0] === g.id).map(e => e.id));
+    run('DELETE FROM repertoire_groups WHERE id = ?', g.id); // (its moves leave it with it)
+    if (keepLines || !only.size) return { removed: 0 };
+    const stay = movesLeadingTo(before, e => !only.has(e.id));
+    for (const e of before) if (only.has(e.id) && !stay.has(e.id)) run('DELETE FROM repertoire WHERE id = ?', e.id);
+    pruneUnreachable(g.color);
+    return { removed: before.length - repertoire(g.color).length };
+  });
+}
+
+/**
+ * Puts a line into a group: its moves from the initial position and the repertoire's moves after its last one ("this
+ * line" is what the student plays from there on, too). The moves must be in the repertoire already.
+ */
+function putInGroup(groupId, color, ucis) {
+  const entries = repertoire(color);
+  const at = byPosition(entries);
+  const ids = new Set();
+  const pos = initialPos();
+  for (const u of ucis) {
+    const e = (at.get(keyOf(pos)) || []).find(x => x.uci === u);
+    const move = moveFromUci(pos, u);
+    if (!e || !move) break;
+    ids.add(e.id);
+    pos.play(move);
+  }
+  const seen = new Set();
+  const after = p => {
+    const k = keyOf(p);
+    if (seen.has(k)) return;
+    seen.add(k);
+    for (const e of at.get(k) || []) {
+      const move = moveFromUci(p, e.uci);
+      if (!move) continue;
+      ids.add(e.id);
+      const next = p.clone();
+      next.play(move);
+      after(next);
+    }
+  };
+  after(pos);
+  for (const id of ids) run('INSERT OR IGNORE INTO repertoire_group_moves (group_id, move_id) VALUES (?, ?)', groupId, id);
+}
+
+/**
+ * Takes a line out of a group: the move, the group's moves after it that no other line of the group reaches, and the
+ * moves before it that led only there. They stay in the repertoire (in their other groups, or in none). Returns
+ * { taken } (moves).
+ */
+export function removeFromRepertoireGroup(id, key, uci) {
+  const g = repertoireGroup(id);
+  if (!g) throw badRequest('There is no such group.');
+  return tx(() => {
+    const inGroup = repertoire(g.color).filter(e => e.groups.includes(g.id));
+    const target = inGroup.find(e => e.key === key && e.uci === uci);
+    if (!target) throw badRequest(`That move is not in the group “${g.name}”.`);
+    const at = byPosition(inGroup);
+    const afterKey = e => {
+      const p = posFromFen(e.fen);
+      const move = moveFromUci(p, e.uci);
+      if (move) p.play(move);
+      return keyOf(p);
+    };
+    const ends = new Set(inGroup.filter(e => !at.has(afterKey(e))).map(e => e.id)); // the group's lines end there
+    const keep = movesLeadingTo(
+      inGroup.filter(e => e !== target),
+      e => ends.has(e.id),
+    );
+    let taken = 0;
+    for (const e of inGroup)
+      if (!keep.has(e.id)) {
+        run('DELETE FROM repertoire_group_moves WHERE group_id = ? AND move_id = ?', g.id, e.id);
+        taken++;
+      }
+    return { taken };
+  });
 }
 
 export function reviewRepertoireMove(id, grade) {

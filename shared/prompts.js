@@ -81,7 +81,8 @@ ${ROLE}
 - set_engine: switches the student's live Stockfish analysis — the evaluation bar, engine lines and best-move arrow on their Board and Openings screens — on or off. Its lines and arrow give the best move away: when you ask the student to find a move (ask_move, a quiz) while it is on, switch it off first and back on once they have answered. Switch it when they ask, too. Your own Stockfish tools work either way.
 - open_game: opens one of the student's games at a given move on the analysis board.
 - create_report, get_report, save_report: add a report to the Reports screen yourself (statistics over the student's analysed games — all of them or the ones you choose — with your written report), read the statistics behind a report, and save your written report to one.
-- create_exercise, get_repertoire, add_to_repertoire, remove_from_repertoire: training material with spaced repetition — exercises, and the student's White and Black opening repertoires (read them, add lines, remove lines). Change a repertoire only when the student agrees.
+- create_exercise, get_repertoire, add_to_repertoire, remove_from_repertoire, edit_repertoire_group: training material with spaced repetition — exercises, and the student's White and Black opening repertoires, whose lines they keep in groups (e.g. "French") and drill group by group or all together (read them, add lines — into a group —, remove lines, make, rename or delete groups). Change a repertoire only when the student agrees.
+- start_training_game: makes the student play against Stockfish on their Board — a whole game, an opening from its moves, or a position: an endgame to win or to hold, a middlegame plan to carry out — at the strength you choose, with a goal shown under the board. Use it whenever you judge that playing a position out will teach them more than an explanation (after explaining a technique, to practise an opening or an endgame); you are told the result when the game ends.
 - get_player_memory, update_player_memory: your long-term notes about the student.
 - speak: says something out loud to the student (see "Your voice").
 
@@ -132,8 +133,8 @@ export const CLI_TASKS = {
     if (m.reply?.line && !m.gameOver) s += `; best reply now: ${short(m.reply.line, 120)}`;
     return `${s}. Comment in 2–3 sentences: why the move is good or bad in terms of ideas, and what to remember.`;
   },
-  gameEnd: ({ result } = {}) =>
-    `[App] My training game just ended (${short(result, 60)}). Look at it with get_board_state and give me a brief, encouraging review: the turning points, what I did well, and the one or two lessons to take away. Offer to go deeper on any moment.`,
+  gameEnd: ({ result, goal } = {}) =>
+    `[App] My training game just ended (${short(result, 60)}).${goal ? ` The goal you gave me: ${short(goal, 200)}.` : ''} Look at it with get_board_state and give me a brief, encouraging review: ${goal ? 'whether I reached the goal, ' : ''}the turning points, what I did well, and the one or two lessons to take away. Offer to go deeper on any moment.`,
   report: ({ id, title } = {}) =>
     `[App] Write my training report for report #${Number(id) || 0}${title ? ` ("${short(title, 80)}")` : ''}: read my statistics and worst moments with get_report, dig deeper with the tools where useful, and create 5–10 exercises from my most instructive mistakes with create_exercise (the solution is the engine's better move). Then save the complete report with save_report — Markdown with: Overview, Strengths, Main weaknesses (3–5; each with 1–2 example positions from my games as board diagrams with the move I played and the better move, the concept behind it and how to fix it), Openings, Concepts to study, and a 2–4 week Training plan. Finally give me the main points here in a few lines.`,
   lesson: ({ topic } = {}) =>

@@ -285,7 +285,7 @@ export function hostRequest(type, data = {}, { timeout = 30_000, onEvent } = {})
 
 // The tools that change the screen run one after the other, in the order they came: a set_board (or set_engine) right
 // after (or together with) a switch_screen goes to the new screen.
-const SCREEN_TOOLS = new Set(['switch_screen', 'set_board', 'open_game', 'set_engine']);
+const SCREEN_TOOLS = new Set(['switch_screen', 'set_board', 'open_game', 'set_engine', 'start_training_game']);
 let screenTools = Promise.resolve();
 
 function runTool(m) {
@@ -304,6 +304,7 @@ async function execTool({ id, name, arguments: args }) {
     if (name === 'get_board_state' || name === 'set_board' || name === 'set_engine') body.screen = currentScreen();
     result = await post(`/api/agent/tools/${encodeURIComponent(String(name))}`, body);
     if (name === 'switch_screen' && !result?.isError) await screenShown(SCREENS[body.arguments.screen]?.view, body.arguments.tab);
+    if (name === 'start_training_game' && !result?.isError) await screenShown('analysis', null, 'play'); // (the coach looks at the game next)
   } catch (e) {
     result = { content: `The Plymentor app could not run this tool: ${e.message}`, isError: true };
   }
@@ -456,8 +457,11 @@ export function useCoachScreen(view, getContext, onUi) {
 const ROUTE_OF = { analysis: 'analysis', play: 'analysis', openings: 'openings', drill: 'openings', exercises: 'train', lesson: 'train', reports: 'reports' };
 const REGISTERING = new Set(Object.values(ROUTE_OF));
 
-/** Resolves once the window shows the screen of the route `view` (and Train's tab), ready for the coach — at most 3 s. */
-function screenShown(view, tab) {
+/**
+ * Resolves once the window shows the screen of the route `view` (and Train's tab, or the screen's own view name:
+ * `exact`), ready for the coach — at most 3 s.
+ */
+function screenShown(view, tab, exact) {
   const t0 = Date.now();
   return new Promise(resolve => {
     const check = () => {
@@ -465,6 +469,7 @@ function screenShown(view, tab) {
       const name = top && (typeof top.view === 'function' ? top.view() : top.view);
       let ready = REGISTERING.has(view) ? ROUTE_OF[name] === view : !top && parseHash().view === view;
       if (ready && view === 'train' && tab) ready = name === (tab === 'lessons' ? 'lesson' : 'exercises');
+      if (ready && exact) ready = name === exact;
       if (ready || !view || Date.now() - t0 > 3000) resolve();
       else setTimeout(check, 25);
     };
@@ -498,7 +503,7 @@ export function onCoachUi(ev) {
   window.dispatchEvent(new CustomEvent('cc:coach-ui', { detail: ev }));
   // switch_screen: the screen takes its tab from the route (and drops it from the address once it has it)
   if (ev.action === 'switch_screen') return navigate(`#/${encodeURIComponent(ev.view)}${ev.tab ? `?tab=${encodeURIComponent(ev.tab)}` : ''}`);
-  if (ev.action !== 'set_board' && ev.action !== 'open_game') return;
+  if (ev.action !== 'set_board' && ev.action !== 'open_game' && ev.action !== 'start_game') return;
   const top = screens.at(-1)?.current;
   if (top?.onUi?.(ev) === true) return;
   if (ev.action === 'open_game') navigate(`#/analysis?game=${Number(ev.gameId)}&ply=${Number(ev.ply) || 0}`);
@@ -508,7 +513,7 @@ export function onCoachUi(ev) {
   }
 }
 
-/** A set_board action that arrived while no screen could show it. */
+/** A set_board (or start_game) action that arrived while no screen could show it. */
 export function takePendingUi() {
   const ev = pendingUi;
   pendingUi = null;

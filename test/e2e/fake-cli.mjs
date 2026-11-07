@@ -136,5 +136,19 @@ async function handle(text) {
     say(`explain: ${b.text.split('\n').find(l => l.startsWith('Current position')) || b.text.split('\n')[0]}`);
     return;
   }
+  if (/give me an endgame/i.test(text)) {
+    // makes the student play a rook endgame out against Stockfish (from whatever screen they are on), then looks
+    const r = await call('start_training_game', { fen: '8/8/8/4k3/8/8/8/R3K3 w - - 0 1', level: 1, comments: 'off', goal: 'Mate with the rook' });
+    say(`training game: ${r.isError ? `ERROR ${r.text.slice(0, 60)}` : 'ok'}`);
+    const b = await call('get_board_state', {});
+    say(`game seen: ${/You started it/.test(b.text) ? 'started by me' : '?'}`);
+    return;
+  }
+  const end = /My training game just ended \(([^,)]*)[^)]*\)\.(?: The goal you gave me: ([^.]*)\.)?/.exec(text);
+  if (end) {
+    // (short: "game end: 0-1 + goal" when the goal it gave came back with the result)
+    say(`game end: ${end[1]}${end[2] === 'Mate with the rook' ? ' + goal' : end[2] ? ' + ?' : ''}`);
+    return;
+  }
   say('ok');
 }

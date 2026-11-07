@@ -90,7 +90,7 @@ test('coach instructions include the profile safely and the voice state', () => 
 
 test('app requests to the coach are single lines with bounded values', () => {
   for (const [name, fn] of Object.entries(CLI_TASKS)) {
-    const line = fn({ moveEval: { san: 'Nf3\nevil', best: { san: 'e4', line: 'x'.repeat(1000) }, winBefore: 50, winAfter: 40 }, topic: 'IQP\r\n!', name: 'Sicilian', pgn: '1. e4 c5', result: '1-0', id: 3, title: 'T', played: 'Nf3', solution: 'e4', san: 'e4' });
+    const line = fn({ moveEval: { san: 'Nf3\nevil', best: { san: 'e4', line: 'x'.repeat(1000) }, winBefore: 50, winAfter: 40 }, topic: 'IQP\r\n!', name: 'Sicilian', pgn: '1. e4 c5', result: '1-0', goal: 'Win\n'.repeat(500), id: 3, title: 'T', played: 'Nf3', solution: 'e4', san: 'e4' });
     assert.equal(typeof line, 'string', name);
     assert.ok(line.startsWith('[App] '), name);
     assert.ok(line.length < 2500, `${name} length ${line.length}`);
