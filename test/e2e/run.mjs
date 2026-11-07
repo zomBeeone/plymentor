@@ -472,6 +472,8 @@ async function main() {
     await page.click('.rep-new button', 'Make the group');
     await page.waitFor(`${folder('Sicilian')} && document.querySelector('.rep-target select')?.selectedOptions[0]?.textContent === 'Sicilian'`, { what: 'the new group, chosen for the next line' });
     await page.click('.board-controls button', 'Reset');
+    // (the board takes the position after the screen's render: clicked sooner, the moves go to 3. Nc3's position)
+    await page.waitFor(`!document.querySelector('.panel.moves .movelist .active') && [...document.querySelectorAll('.board-area cg-board piece')].some(p => p.cgKey === 'e2')`, { what: 'the starting position on the board' });
     const side = await page.eval(`document.querySelector('.board-area .cg-wrap').classList.contains('orientation-black') ? 'black' : 'white'`);
     for (const sq of ['e2', 'e4', 'c7', 'c5']) await page.clickSquare('.board-area .cg-wrap', sq, side);
     await page.waitFor(`document.querySelector('.panel.moves .movelist .active')?.textContent.includes('c5')`, { what: '1. e4 c5 on the board' });
