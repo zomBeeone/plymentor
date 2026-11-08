@@ -33,6 +33,7 @@
   --mono: ui-monospace, 'Cascadia Mono', Consolas, monospace;
   --topbar: 50px;
   --board-size: min(calc(100vh - var(--topbar) - 118px), 46vw, 860px);
+  --board-reserve: 118px; /* (what the board's column needs under the board: how tall the student can pull the board) */
   color-scheme: dark;
 }
 
@@ -181,13 +182,30 @@ input[type='range'] { accent-color: var(--accent); }
 /* ---------- board workspace ---------- */
 .workspace {
   display: grid;
-  grid-template-columns: auto minmax(270px, 360px) minmax(340px, 1fr);
+  grid-template-columns: auto var(--mid-w, minmax(270px, 360px)) minmax(340px, 1fr);
   gap: 12px;
   padding: 12px;
   height: 100%;
 }
 .workspace.two { grid-template-columns: auto minmax(360px, 1fr); }
 .board-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+/* panels resized by pulling on their sides (components/Split.js): a handle in the gap between two of them */
+.board-col, .side-col.middle, .book-side, .reports { position: relative; }
+.split { position: absolute; z-index: 30; touch-action: none; }
+.split::after { content: ''; position: absolute; border-radius: 2px; background: transparent; transition: background 0.12s; }
+.split-x { top: 0; bottom: 0; right: -10px; width: 8px; cursor: col-resize; }
+.split-x::after { top: 0; bottom: 0; left: 3px; width: 2px; }
+.split-x.at-left { right: auto; left: -10px; }
+.split-y { left: 0; right: 0; top: 0; height: 8px; cursor: row-resize; }
+.split-y::after { left: 0; right: 0; top: 3px; height: 2px; }
+.split:hover::after, .split.dragging::after { background: var(--accent-hi); }
+.split-slot { position: relative; flex: none; height: 0; margin-top: -8px; } /* (between two panels of a column: in the gap above the next) */
+.side-col .split-slot { margin-top: -12px; }
+.side-col .split-y { height: 12px; }
+.side-col .split-y::after { top: 5px; }
+body.resizing { user-select: none; }
+body.resizing-x { cursor: col-resize; }
+body.resizing-y { cursor: row-resize; }
 .board-area { display: flex; gap: 6px; align-items: stretch; }
 .board-wrap { width: var(--board-size); height: var(--board-size); position: relative; flex: none; }
 .board-wrap .cg-wrap { width: 100%; height: 100%; }
@@ -223,7 +241,7 @@ input[type='range'] { accent-color: var(--accent); }
 .side-col { display: flex; flex-direction: column; gap: 12px; min-height: 0; min-width: 0; }
 /* Move lists scroll inside their panel, never the page: next to the explorer (Openings) a fixed share of the column,
    under the board (lessons) the room the board leaves. */
-.side-col .panel.moves { flex: 0 0 26%; min-height: 96px; }
+.side-col .panel.moves { flex: 0 0 var(--moves-h, 26%); min-height: 96px; }
 .board-col .panel.fill { flex: 1 1 0; min-height: 0; }
 
 /* engine lines */
@@ -412,7 +430,7 @@ table.data td.players { white-space: normal; min-width: 220px; }
 .job.games-actions { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px; }
 
 /* ---------- reports ---------- */
-.reports { display: grid; grid-template-columns: 280px 1fr; height: 100%; }
+.reports { display: grid; grid-template-columns: min(var(--list-w, 280px), 45vw) 1fr; height: 100%; }
 .reports .list { border-right: 1px solid var(--border); overflow: auto; padding: 12px; background: var(--bg2); }
 .reports .detail { overflow: auto; padding: 18px 24px 60px; }
 .report-item { padding: 10px 12px; border-radius: 7px; cursor: pointer; margin-bottom: 6px; border: 1px solid transparent; }
@@ -459,6 +477,9 @@ table.data td.players { white-space: normal; min-width: 220px; }
 /* end of a training game on the Board: one row, so it fits under the board like the move verdict */
 .game-result { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 6px; background: var(--panel2); border-left: 3px solid var(--accent); min-width: 0; }
 .game-result .r { font-size: 15px; font-weight: 700; color: var(--strong); white-space: nowrap; }
+.learned-pop { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%); z-index: 950; display: flex; align-items: baseline; gap: 10px; padding: 12px 24px; border-radius: 26px; background: #3f7a1c; color: #fff; font-weight: 700; font-size: 16px; white-space: nowrap; box-shadow: 0 8px 28px rgb(0 0 0 / 0.55); pointer-events: none; animation: learned-pop 2.6s ease both; }
+.learned-pop span { font-weight: 500; font-size: 13px; opacity: 0.85; }
+@keyframes learned-pop { 0% { opacity: 0; transform: translate(-50%, 18px) scale(0.94); } 10% { opacity: 1; transform: translate(-50%, 0) scale(1.03); } 16%, 86% { opacity: 1; transform: translate(-50%, 0) scale(1); } 100% { opacity: 0; transform: translate(-50%, 8px); } }
 .feedback { padding: 10px 12px; border-radius: 8px; font-weight: 600; }
 .feedback.good { background: rgb(98 153 36 / 0.18); color: #b5e08a; }
 .feedback.bad { background: rgb(223 83 83 / 0.15); color: #ffaaaa; }
@@ -525,12 +546,13 @@ table.data td.players { white-space: normal; min-width: 220px; }
   :root { --board-size: min(94vw, 600px); }
   .workspace, .workspace.two { grid-template-columns: 1fr; height: auto; }
   .reports { grid-template-columns: 1fr; }
+  .split, .split-slot { display: none; }
   .nav a { padding: 6px 7px; }
   .status-pills { display: none; }
 }
 .tabs-compact { display: none; }
 /* the Train page has an extra tab row above the board */
-.train-page { --board-size: min(calc(100vh - var(--topbar) - 200px), 46vw, 860px); }
+.train-page { --board-size: min(calc(100vh - var(--topbar) - 200px), 46vw, 860px); --board-reserve: 200px; }
 
 /* ---------- banners ---------- */
 .banner { padding: 8px 14px; display: flex; gap: 10px; align-items: center; border-bottom: 1px solid #0d0c0b; }
@@ -607,9 +629,17 @@ body.start-page { overflow: auto; min-height: 100%; display: flex; align-items: 
 .book-where { font-size: 12.5px; min-width: 96px; text-align: center; }
 .book-where input.book-page-no { width: 50px; padding: 3px 4px; margin: 0 3px; text-align: center; font-variant-numeric: tabular-nums; }
 .book-page { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; border-radius: var(--radius); background: #2b2926; border: 1px solid #2f2c29; display: flex; align-items: center; justify-content: center; }
-.book-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; width: calc(var(--board-size) + 26px); } /* (the board and its evaluation bar) */
-.book-side .panel.grow { flex: 1 1 0; min-height: 90px; }
-.book-side .panel.book-engine { flex: none; }
+.book-side { display: flex; flex-direction: column; gap: 8px; min-height: 0; width: var(--side-w, max(calc(var(--board-size) + 26px), min(480px, 42vw))); } /* (the board and its evaluation bar — and room for the coach's terminal when the board is small) */
+.book-side .board-area { justify-content: center; }
+.book-side .panel-head { min-height: 38px; } /* (the tabs stay where they are between Moves and Coach) */
+.book-side .panel.grow { flex: 1 1 0; min-height: 170px; }
+.book-side .book-engine { flex: none; border-bottom: 1px solid var(--border); }
+.book-coach { flex: 1 1 0; min-height: 190px; }
+.book-caption { color: var(--strong); }
+.tab-busy { display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--accent-hi); vertical-align: 1px; animation: tab-busy 0.9s ease-in-out infinite alternate; }
+@keyframes tab-busy { from { opacity: 0.35; } to { opacity: 1; } }
+.term-coach.small .coach-input { padding: 6px 8px; gap: 5px; }
+.term-coach.small .term-wrap { min-height: 90px; }
 .book-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .book-controls .btn.icon { min-width: 36px; justify-content: center; }
 .book-play { min-width: 96px; justify-content: center; }

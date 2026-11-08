@@ -5,6 +5,7 @@ import { html, useEffect, useRef, useState } from '../../vendor/preact.js';
 import { get, post, del, qs } from '../api.js';
 import { toast, useStore } from '../store.js';
 import { BoardCtrl, useCtrl, useBoardKeys, useForce, useMedia } from '../ctrl.js';
+import { holdable } from '../hold.js';
 import { Tree, placeCoachPosition, commentsOf } from '../tree.js';
 import { engine, useLiveEval, engineSwitches, setEngineSwitch, useEngineSwitch } from '../engine.js';
 import { Board } from '../components/Board.js';
@@ -15,6 +16,9 @@ import { Explorer } from '../components/Explorer.js';
 import { useCoachHandle } from '../components/coachHandle.js';
 import { CoachPanel } from '../components/CoachPanel.js';
 import { useCoachScreen, coachRequest } from '../coachTerm.js';
+import { useBoardSplits, Splitter, clamp, px } from '../components/Split.js';
+import { pingSound } from '../sound.js';
+import { learningLines, nextStep, movesOfLines, DRILLS_TO_LEARN } from '../learn.js';
 import { repKey, turnOf, playUci, INITIAL_FEN, tryPos } from '../chess.js';
 import { cls, stored, store } from '../util.js';
 import { clearParams } from '../router.js';
@@ -25,6 +29,8 @@ const os = {
   repColor: stored('openings.repColor', 'white'),
   entries: { white: null, black: null }, // the repertoire's moves, each with the ids of its groups
   groups: { white: [], black: [] }, // { id, name, moves, studentMoves, due }
+  progress: { white: {}, black: {} }, // how far each line is learned: { line id: { shown, drilled, learned } }
+  popup: null, // "Line learned": { id, text }
   target: stored('openings.groupTarget', { white: 0, black: 0 }), // the group "Add current line" puts the line into (0: none)
   folded: stored('openings.groupsFolded', []), // the groups shown without their lines, as "color:id" (other lines: id 0)
   newGroup: null, // the name typed for a new group (null: none being made)
@@ -69,7 +75,26 @@ async function loadRep(color) {
   os.entries[color] = r.entries;
   os.stats = { ...(os.stats || {}), [color]: r.stats };
   os.groups[color] = r.groups || [];
+  os.progress[color] = r.progress || {};
   return r.entries;
+}
+
+const linesMemo = new WeakMap(); // a repertoire's moves (a new list at every load) → its lines, per group
+
+/** The lines of a repertoire with how far each is learned: of a group (its id), of no group (0), or of all (null). */
+function linesOfScope(color, id) {
+  const list = os.entries[color] || [];
+  let memo = linesMemo.get(list);
+  if (!memo) linesMemo.set(list, (memo = new Map()));
+  if (!memo.has(id)) memo.set(id, learningLines(id === null ? list : id ? list.filter(e => e.groups.includes(id)) : otherLines(list), os.progress[color], color));
+  return memo.get(id);
+}
+
+/** Numbers of some lines: { total, learned, toLearn, due (the learned lines' moves of the student's to drill now) }. */
+function lineCounts(lines, color) {
+  const learned = lines.filter(l => l.learned);
+  const due = movesOfLines(learned).filter(e => turnOf(e.fen) === color && (!e.due || e.due <= Date.now())).length;
+  return { total: lines.length, learned: learned.length, toLearn: lines.length - learned.length, due };
 }
 
 function byKey(entries) {
@@ -133,6 +158,7 @@ export function Openings({ route }) {
   const rerender = useForce();
   const coach = useCoachHandle();
   const compact = useMedia('(max-width: 1280px)');
+  const split = useBoardSplits('openings');
   const node = ctrl.node;
   const [opening, setOpening] = useState(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -195,7 +221,7 @@ export function Openings({ route }) {
       mode: os.drill ? 'drill' : 'openings',
       startFen: ctrl.tree.isStandardStart ? undefined : ctrl.tree.startFen,
       ucis: ctrl.tree.ucis(at),
-      drill: os.drill ? { color: os.drill.color, group: os.drill.group?.name } : undefined,
+      drill: os.drill ? { color: os.drill.color, group: os.drill.group?.name, learn: !!os.drill.learn } : undefined,
       engine: !os.drill && engineSwitches().openings && ev?.lines?.length ? { depth: ev.depth, lines: ev.lines.map(l => ({ score: l.score, pv: (l.pv || []).slice(0, 12) })) } : undefined,
       question: os.question && repKey(os.question.fen) === repKey(at.fen) ? true : undefined,
       comment: os.drill ? undefined : repNote(at, os.repColor) || undefined,
@@ -348,20 +374,184 @@ export function Openings({ route }) {
     rerender();
   };
 
-  // ---- drill ----
-  /** Drills the whole repertoire (no argument), one group's lines (its id), or the lines in no group (0). */
-  const startDrill = async which => {
-    const list = await loadRep(color);
-    const g = which === 0 ? { id: 0, name: 'Other lines' } : (which && os.groups[color].find(x => x.id === which)) || null;
-    const lines = !g ? list : g.id ? list.filter(e => e.groups.includes(g.id)) : otherLines(list);
-    if (!lines.some(e => turnOf(e.fen) === color))
-      return toast(g ? `${g.name} has no moves for ${color} yet. Add lines to it first.` : `Your ${color} repertoire has no moves for ${color} yet. Add some lines first.`, 'error');
+  // ---- learn and drill ----
+  /** The group a Learn or Drill is for: its id, 0 for the lines in no group, nothing for the whole repertoire. */
+  const scopeOf = which => (which === 0 ? { id: 0, name: 'Other lines' } : (which && os.groups[color].find(x => x.id === which)) || null);
+
+  /** Learn: the lines of the whole repertoire (no argument), of one group (its id), or of no group (0) not learned yet. */
+  const startLearn = async which => {
+    await loadRep(color);
+    const g = scopeOf(which);
+    const lines = linesOfScope(color, g ? g.id : null);
+    if (!lines.length) return toast(g ? `${g.name} has no lines with a move for ${color} yet. Add lines to it first.` : `Your ${color} repertoire has no lines with a move for ${color} yet. Add some lines first.`, 'error');
+    if (lines.every(l => l.learned)) return toast(`${g ? g.name : `Your ${color} repertoire`}: every line is learned. Drill them.`, 'success');
     stopAnim();
     os.question = null;
     os.drill = {
       color,
       group: g ? { id: g.id, name: g.name } : null,
-      map: byKey(lines),
+      map: byKey(movesOfLines(lines)),
+      learn: { lines, session: {}, step: null, at: 0, perfect: true },
+      feedback: null,
+      correct: 0,
+      wrong: 0,
+      expected: null,
+      firstTry: true,
+      arrows: [],
+    };
+    ctrl.orientation = color;
+    learnNext();
+  };
+
+  /** What a Learn does next: a new line to repeat, or an in-between from memory. */
+  function learnNext() {
+    const d = os.drill;
+    if (!d?.learn) return;
+    const l = d.learn;
+    const step = nextStep(l.lines, l.session);
+    d.arrows = [];
+    d.expected = null;
+    if (!step) {
+      d.feedback = { kind: 'good', text: `Every line${d.group ? ` of ${d.group.name}` : ''} is learned. Drill them whenever you like.` };
+      return rerender();
+    }
+    l.step = step;
+    l.at = 0;
+    l.perfect = true;
+    d.feedback = step.kind === 'learn' ? { kind: 'info', text: 'A new line: repeat its moves on the board.' } : { kind: 'info', text: 'Now from memory: play this line.' };
+    ctrl.setTree(new Tree());
+    learnMove();
+  }
+
+  /** The line's next move: the other side's is played, the student's waits for them — shown first when it is a new line. */
+  function learnMove() {
+    const d = os.drill;
+    const l = d.learn;
+    const { kind, line } = l.step;
+    const e = line.moves[l.at];
+    if (!e) return learnDone();
+    d.arrows = [];
+    d.expected = null;
+    if (turnOf(e.fen) === d.color) {
+      d.expected = [e];
+      d.firstTry = true;
+      if (kind === 'learn') {
+        d.arrows = [{ orig: e.uci.slice(0, 2), dest: e.uci.slice(2, 4), brush: 'green' }];
+        d.feedback = { kind: 'info', text: `Your move: ${e.san}${e.comment ? ` — ${e.comment}` : ''}` };
+      }
+    } else {
+      const step = l.step;
+      setTimeout(() => {
+        if (os.drill !== d || l.step !== step) return;
+        ctrl.play(e.uci);
+        l.at++;
+        learnMove();
+      }, kind === 'learn' ? 600 : 450);
+    }
+    rerender();
+  }
+
+  /** The student's move in a Learn: the line's goes on; another is taken back, and the line's shown. */
+  function onLearnMove(uci) {
+    const d = os.drill;
+    const l = d.learn;
+    const want = d.expected?.[0];
+    if (!want) return;
+    const parent = ctrl.node;
+    const r = ctrl.play(uci);
+    if (!r) return;
+    const { kind, line } = l.step;
+    if (r.node.uci === want.uci) {
+      if (kind === 'drill') d.correct++;
+      if (kind === 'drill' && line.learned) post('/api/repertoire/review', { id: want.id, grade: d.firstTry ? 2 : 1 }).catch(() => {});
+      d.feedback = { kind: 'good', text: `✓ ${r.node.label}${want.comment ? ` — ${want.comment}` : ''}` };
+      l.at++;
+      return learnMove();
+    }
+    // (another of their repertoire's moves here is no mistake: this time it is the other line)
+    const other = (d.map.get(repKey(parent.fen)) || []).some(e => e.uci === r.node.uci);
+    if (kind === 'drill' && !other) {
+      d.wrong++;
+      l.perfect = false;
+      if (d.firstTry && line.learned) post('/api/repertoire/review', { id: want.id, grade: 0 }).catch(() => {});
+    }
+    d.firstTry = false;
+    d.expected = null;
+    d.feedback = other ? { kind: 'info', text: `${r.node.san} is your other line here. In this line: ${want.san}.` } : { kind: 'bad', text: `Not ${r.node.san}. Play ${want.san}.` };
+    d.arrows = [{ orig: want.uci.slice(0, 2), dest: want.uci.slice(2, 4), brush: 'green' }];
+    rerender();
+    setTimeout(() => {
+      if (os.drill !== d) return;
+      ctrl.tree.remove(r.node);
+      ctrl.goto(parent);
+      d.expected = [want];
+      rerender();
+    }, 650);
+  }
+
+  /** A line of a Learn played to its end. */
+  function learnDone() {
+    const d = os.drill;
+    const l = d.learn;
+    const { kind, line } = l.step;
+    d.arrows = [];
+    d.expected = null;
+    l.session.last = line.id;
+    const record = event => {
+      // (the numbers on the screen go along: a group's lines and all of them are lists of their own)
+      os.progress[d.color] = { ...os.progress[d.color], [line.id]: { shown: line.shown, drilled: line.drilled, learned: line.drilled >= DRILLS_TO_LEARN } };
+      linesMemo.delete(os.entries[d.color]);
+      post('/api/repertoire/lines', { color: d.color, line: line.id, event }).catch(e => toast(e.message, 'error'));
+    };
+    if (kind === 'learn') {
+      line.shown++;
+      l.session.sinceDrill = (l.session.sinceDrill || 0) + 1;
+      record('shown');
+      d.feedback = { kind: 'good', text: 'Line gone through.' };
+    } else {
+      l.session.sinceDrill = 0;
+      if (!l.perfect) d.feedback = { kind: 'bad', text: 'Not this time: it comes again.' };
+      else if (line.learned) d.feedback = { kind: 'good', text: 'Right, you still know it.' };
+      else {
+        line.drilled++;
+        record('drilled');
+        if (line.drilled >= DRILLS_TO_LEARN) {
+          line.learned = true;
+          lineLearned(d, line);
+          d.feedback = { kind: 'good', text: 'Line learned!' };
+        } else d.feedback = { kind: 'good', text: `Right: ${line.drilled} of ${DRILLS_TO_LEARN} from memory.` };
+      }
+    }
+    rerender();
+    const step = l.step;
+    setTimeout(() => os.drill === d && l.step === step && learnNext(), 1100);
+  }
+
+  /** A line just learned: a little ping, and "Line learned" at the bottom of the window. */
+  function lineLearned(d, line) {
+    pingSound();
+    const { learned, total } = lineCounts(d.learn.lines, d.color);
+    const popup = { id: line.id, text: `${learned} of ${total}${d.group ? ` in ${d.group.name}` : ''}` };
+    os.popup = popup;
+    setTimeout(() => {
+      if (os.popup !== popup) return;
+      os.popup = null;
+      rerender();
+    }, 2600);
+  }
+
+  /** Drills the learned lines of the whole repertoire (no argument), of one group (its id), or of no group (0). */
+  const startDrill = async which => {
+    await loadRep(color);
+    const g = scopeOf(which);
+    const lines = linesOfScope(color, g ? g.id : null).filter(l => l.learned);
+    if (!lines.length) return toast(`${g ? g.name : `Your ${color} repertoire`} has no learned lines to drill yet: learn them first.`, 'error');
+    stopAnim();
+    os.question = null;
+    os.drill = {
+      color,
+      group: g ? { id: g.id, name: g.name } : null,
+      map: byKey(movesOfLines(lines)),
       feedback: { kind: 'info', text: g ? `Play your repertoire moves: ${g.name}.` : 'Play your repertoire moves.' },
       correct: 0,
       wrong: 0,
@@ -466,6 +656,7 @@ export function Openings({ route }) {
 
   /** A move on the board: the drill's, an answer to the coach's question, or a move to explore. */
   const onMove = uci => {
+    if (d?.learn) return onLearnMove(uci);
     if (d) return onDrillMove(uci);
     const parent = ctrl.node;
     const r = ctrl.play(uci);
@@ -515,15 +706,16 @@ export function Openings({ route }) {
   // groups, the one tree.
   const loose = groups.length ? otherLines(entries) : [];
   const folders = [
-    ...groups.map(g => ({ ...g, entries: entries.filter(e => e.groups.includes(g.id)) })),
-    ...(loose.length ? [{ id: 0, name: 'Other lines', entries: loose, ...countsOf(entries.filter(e => !e.groups.length), color) }] : []),
+    ...groups.map(g => ({ ...g, entries: entries.filter(e => e.groups.includes(g.id)), lines: lineCounts(linesOfScope(color, g.id), color) })),
+    ...(loose.length ? [{ id: 0, name: 'Other lines', entries: loose, ...countsOf(entries.filter(e => !e.groups.length), color), lines: lineCounts(linesOfScope(color, 0), color) }] : []),
   ];
+  const all = lineCounts(linesOfScope(color, null), color);
   const inGroups = inRep ? inRep.groups.map(id => groups.find(g => g.id === id)).filter(Boolean) : [];
   const repertoire = html`<div class="panel grow">
     <div class="panel-head">
       <div class="btn-group">${['white', 'black'].map(c => html`<button class=${cls('btn small', color === c && 'active')} onClick=${() => setColor(c)}>${c === 'white' ? 'White' : 'Black'} repertoire</button>`)}</div>
       <span class="spacer"></span>
-      <span class="muted" style="font-size:12px">${os.stats?.[color] ? `${os.stats[color].studentMoves} moves · ${os.stats[color].due} due` : ''}</span>
+      <span class="muted" style="font-size:12px">${all.total ? `${all.learned} of ${all.total} line${all.total === 1 ? '' : 's'} learned · ${all.due} due` : ''}</span>
     </div>
     <div class="row wrap rep-actions">
       <button
@@ -542,9 +734,14 @@ export function Openings({ route }) {
             </select></label>`
         : null}
       <button class="btn small" disabled=${!!d} onClick=${() => setImportOpen(true)}>Import PGN</button>
-      <button class="btn small blue" disabled=${!!d} title=${groups.length ? 'Drill every line of your repertoire; each group has its own Drill too' : ''} onClick=${() => startDrill()}>
-        ${groups.length ? 'Drill all' : 'Drill'} (${os.stats?.[color]?.due ?? 0} due)
-      </button>
+      <div class="btn-group">
+        <button class="btn small primary" disabled=${!!d || !all.toLearn} title="The app gives you each line's moves one by one and you repeat them, with drills in between; each group has its own Learn too" onClick=${() => startLearn()}>
+          ${groups.length ? 'Learn all' : 'Learn'} (${all.toLearn})
+        </button>
+        <button class="btn small blue" disabled=${!!d || !all.learned} title=${all.learned ? 'Play your learned lines from memory; each group has its own Drill too' : 'Only learned lines are drilled: learn some first'} onClick=${() => startDrill()}>
+          ${groups.length ? 'Drill all' : 'Drill'} (${all.due} due)
+        </button>
+      </div>
       <button class="btn small ghost" disabled=${!!d} title="A group (folder) for an opening's lines, e.g. French — drill it on its own" onClick=${newGroup}>＋ Group</button>
     </div>
     ${inRep &&
@@ -576,6 +773,7 @@ export function Openings({ route }) {
               renaming=${os.renaming?.id === f.id ? os.renaming.name : null}
               onToggle=${() => toggleFolder(f.id)}
               onPick=${p => (f.id && setTarget(color, f.id), loadLine(p))}
+              onLearn=${() => startLearn(f.id)}
               onDrill=${() => startDrill(f.id)}
               onRename=${f.id ? name => ((os.renaming = name === null ? null : { id: f.id, name }), rerender()) : null}
               onRenamed=${renameGroup}
@@ -609,8 +807,10 @@ export function Openings({ route }) {
   const side = !compact ? os.side : d && os.compactTab === 'moves' ? 'repertoire' : os.compactTab;
   const sidePanel = { repertoire, coach: coachPanel, moves: html`${enginePanel}<div class="panel grow"><div class="panel-body">${moves}</div>${comment}</div>`, explorer: html`${find}${explorer}` }[side] || coachPanel;
 
-  return html`<div class="workspace">
+  return html`<div class="workspace" ref=${split.root}>
+    ${os.popup && html`<div class="learned-pop" key=${os.popup.id}>✓ Line learned <span>${os.popup.text}</span></div>`}
     <div class="board-col">
+      ${split.board}
       <div class="board-area">
         ${!d && s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${engineOn ? live?.lines?.[0]?.score || null : null} fen=${node.fen} off=${!engineOn} orientation=${ctrl.orientation} />`}
         <${Board} fen=${node.fen} orientation=${ctrl.orientation} lastMove=${ctrl.lastMove} movable=${movable} onMove=${onMove} shapes=${shapes} banner=${asking ? 'Your turn — play your answer on the board' : null} />
@@ -620,23 +820,34 @@ export function Openings({ route }) {
       <div class="board-controls">
         ${!d &&
         html`<button class="btn icon" title="First (↑)" onClick=${() => ctrl.first()}>⏮</button>
-          <button class="btn icon" title="Back (←)" onClick=${() => ctrl.prev()}>◀</button>
-          <button class="btn icon" title="Forward (→)" onClick=${() => ctrl.next()}>▶</button>
+          <button class="btn icon" title="Back (←)" ...${holdable(() => ctrl.prev())}>◀</button>
+          <button class="btn icon" title="Forward (→)" ...${holdable(() => ctrl.next())}>▶</button>
           <button class="btn icon" title="Last (↓)" onClick=${() => ctrl.last()}>⏭</button>`}
         <button class="btn icon" title="Flip (f)" onClick=${() => ctrl.flip()}>⇅</button>
         <span class="spacer"></span>
         ${d
-          ? html`<span class="muted ellipsis">${d.group ? `${d.group.name} · ` : ''}✓ ${d.correct} · ✗ ${d.wrong}</span>
+          ? html`<span class="muted ellipsis">${d.group ? `${d.group.name} · ` : ''}${d.learn ? `${lineCounts(d.learn.lines, d.color).learned} of ${d.learn.lines.length} learned` : `✓ ${d.correct} · ✗ ${d.wrong}`}</span>
               ${node.uci && html`<button class="btn small" onClick=${() => coach.send?.(`Why is ${node.san} played here?`, { task: 'repertoireWhy', taskArgs: { san: node.san }, label: `Why ${node.label}?` })}>Why this move?</button>`}
-              <button class="btn small danger" onClick=${stopDrill}>Stop drill</button>`
+              <button class="btn small danger" onClick=${stopDrill}>${d.learn ? 'Stop learning' : 'Stop drill'}</button>`
           : html`<button class="btn small ghost" title="A new board at the starting position" onClick=${reset}>Reset</button>`}
       </div>
     </div>
     ${!compact &&
     html`<div class="side-col middle">
+      ${split.middle}
       ${find}
       ${!d && enginePanel}
       ${!d && html`<div class="panel moves"><div class="panel-body">${moves}</div>${comment}</div>`}
+      ${!d &&
+      html`<div class="split-slot"><${Splitter}
+        axis="y"
+        title="Drag to resize the moves and the explorer"
+        begin=${() => {
+          const col = split.root.current.querySelector('.side-col.middle');
+          return { h: col.querySelector('.panel.moves').offsetHeight, below: col.querySelector(':scope > .panel.grow').offsetHeight };
+        }}
+        onDrag=${(dy, f) => split.set({ '--moves-h': px(clamp(f.h + dy, 96, Math.max(96, f.h + f.below - 120))) })}
+      /></div>`}
       ${explorer}
     </div>`}
     <div class="side-col">
@@ -747,7 +958,7 @@ function AutoFocus({ children }) {
  * A group of the repertoire (or, id 0, the lines in no group): its name, numbers and buttons — its own drill, renaming,
  * deleting —, and unfolded its lines from the initial position.
  */
-function RepFolder({ folder: f, color, open, current, busy, renaming, onToggle, onPick, onDrill, onRename, onRenamed, onDelete }) {
+function RepFolder({ folder: f, color, open, current, busy, renaming, onToggle, onPick, onLearn, onDrill, onRename, onRenamed, onDelete }) {
   const done = e => {
     e.preventDefault();
     onRenamed();
@@ -761,9 +972,12 @@ function RepFolder({ folder: f, color, open, current, busy, renaming, onToggle, 
         : html`<button class="rep-group-name" title=${open ? 'Fold its lines up' : 'Show its lines'} onClick=${onToggle}>
             <span class="chev">${open ? '▾' : '▸'}</span><span class="ellipsis">${f.name}</span>
           </button>`}
-      <span class="rep-group-count" title=${`${f.studentMoves} of them yours`}>${f.moves} move${f.moves === 1 ? '' : 's'}${f.due ? ` · ${f.due} due` : ''}</span>
+      <span class="rep-group-count" title=${`${f.moves} move${f.moves === 1 ? '' : 's'}, ${f.studentMoves} of them yours`}>${f.lines.learned}/${f.lines.total} learned${f.lines.due ? ` · ${f.lines.due} due` : ''}</span>
       <span class="spacer"></span>
-      <button class="btn small ghost" disabled=${busy || !f.studentMoves} title=${`Drill only ${f.id ? `the lines of ${f.name}` : 'the lines in no group'}`} onClick=${onDrill}>Drill</button>
+      <div class="btn-group">
+        <button class="btn small ghost" disabled=${busy || !f.lines.toLearn} title=${`Learn ${f.id ? `the lines of ${f.name}` : 'the lines in no group'}: you repeat each line's moves, with drills in between`} onClick=${onLearn}>Learn</button>
+        <button class="btn small ghost" disabled=${busy || !f.lines.learned} title=${f.lines.learned ? `Drill the learned lines of ${f.id ? f.name : 'no group'}` : 'Only learned lines are drilled: learn some first'} onClick=${onDrill}>Drill</button>
+      </div>
       ${onRename && renaming === null && html`<button class="btn small ghost tool" title="Rename the group" onClick=${() => onRename(f.name)}>✎</button>`}
       ${onDelete && html`<button class="btn small ghost tool" title="Delete the group" onClick=${onDelete}>✕</button>`}
     </div>

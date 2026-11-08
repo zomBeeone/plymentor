@@ -36,7 +36,9 @@ const DOWNLOADS = join(TMP, 'e2e-downloads');
 const SCID = join(TMP, 'e2e-scid'); // a game database the student downloaded and unpacked themselves
 const fixture = readFileSync(join(ROOT, 'test', 'fixtures', 'games.pgn'), 'utf8');
 const EXE = process.env.E2E_EXE ? join(ROOT, process.env.E2E_EXE) : join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
-const ARGS = process.env.E2E_EXE ? [] : [ROOT];
+// (the window keeps drawing when other windows cover it: the steps through a game's moves go with the screen's frames)
+const VISIBLE = ['--disable-features=CalculateNativeWinOcclusion', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding'];
+const ARGS = process.env.E2E_EXE ? VISIBLE : [ROOT, ...VISIBLE];
 const ENV = {
   PLYMENTOR_HOME: HOME,
   PLYMENTOR_LEGACY_HOME: LEGACY,
@@ -89,6 +91,69 @@ const gameRows = page => page.eval(`document.querySelectorAll('table.data tbody 
 // not key presses: those only arrive while the test window has the keyboard focus.
 const ask = (page, text) =>
   page.eval(`(t => { t.focus(); for (const data of [${JSON.stringify(text)}, '\\r']) t.dispatchEvent(new InputEvent('input', { data, inputType: 'insertText', bubbles: true })); return true; })([...document.querySelectorAll('.xterm-helper-textarea')].find(t => t.offsetParent))`);
+
+/** Drags a resize handle with the real mouse. */
+async function drag(page, selector, dx, dy = 0) {
+  const r = await page.eval(`(b => ({ x: b.x + b.width / 2, y: b.y + b.height / 2 }))(document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect())`);
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: r.x, y: r.y });
+  await page.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: r.x, y: r.y, button: 'left', buttons: 1, clickCount: 1 });
+  for (let i = 1; i <= 6; i++) {
+    await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: r.x + (dx * i) / 6, y: r.y + (dy * i) / 6, button: 'left', buttons: 1 });
+    await sleep(25);
+  }
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: r.x + dx, y: r.y + dy, button: 'left', buttons: 0, clickCount: 1 });
+  await sleep(150);
+}
+
+/** Holds an arrow key down for `ms` with real key events (the first press only: the app does not use the repeats). */
+async function holdKey(page, key, ms) {
+  const vk = { ArrowLeft: 37, ArrowRight: 39 }[key];
+  const event = { key, code: key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
+  await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...event });
+  await sleep(ms);
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...event });
+}
+
+/**
+ * Plays a Learn to its end, as a student would: a move shown by its arrow is played and remembered; in an in-between, the
+ * move remembered for the position (the other of two is answered with its arrow). Returns what the pop-ups said.
+ */
+async function learnToTheEnd(page, side, timeout = 120000) {
+  const known = new Map();
+  const pops = new Set();
+  let last = null;
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeout) {
+    const s = await page.eval(`(() => {
+      const wrap = document.querySelector('.board-area .cg-wrap');
+      const pieces = [...wrap.querySelectorAll('cg-board piece:not(.fading)')];
+      const last = [...wrap.querySelectorAll('square.last-move')].map(e => e.cgKey);
+      const moved = pieces.find(p => last.includes(p.cgKey));
+      return {
+        feedback: document.querySelector('.feedback')?.innerText || '',
+        arrows: [...wrap.querySelectorAll('svg g[cgHash]')].map(g => g.getAttribute('cgHash')),
+        mover: moved ? (moved.classList.contains('white') ? 'white' : 'black') : 'white-next',
+        // (each piece and its square: a piece on its way has another class)
+        board: pieces.map(p => p.cgKey + [...p.classList].filter(c => /^(white|black|pawn|knight|bishop|rook|queen|king)$/.test(c)).sort()).sort().join(),
+        moving: !!wrap.querySelector('piece.anim, piece.dragging'),
+        pop: document.querySelector('.learned-pop')?.innerText || '',
+      };
+    })()`);
+    last = s;
+    if (s.pop) pops.add(s.pop.replace(/\s+/g, ' '));
+    if (/is learned\. Drill them/.test(s.feedback)) return [...pops];
+    const mine = side === 'black' ? s.mover === 'white' : s.mover === 'black' || s.mover === 'white-next';
+    const arrow = s.arrows.map(h => /,([a-h][1-8]),([a-h][1-8]),/.exec(h)).find(Boolean);
+    const move = arrow ? [arrow[1], arrow[2]] : known.get(s.board);
+    if (mine && move && !s.moving && !/Line gone through|Line learned|from memory\.$|comes again|still know/.test(s.feedback)) {
+      if (arrow) known.set(s.board, move);
+      await page.clickSquare('.board-area .cg-wrap', move[0], side);
+      await page.clickSquare('.board-area .cg-wrap', move[1], side);
+    }
+    await sleep(120);
+  }
+  throw new Error(`the Learn did not end: ${JSON.stringify({ ...last, board: undefined })}`);
+}
 
 /** The test's game database as the student would have it after unpacking a download: Test_Base.si5/.sn5/.sg5. */
 function makeScidDatabase() {
@@ -480,6 +545,26 @@ async function main() {
     await page.waitFor(`document.querySelector('.panel.moves .movelist .active')?.textContent.includes('c5')`, { what: '1. e4 c5 on the board' });
     await page.click('.rep-actions button', 'Add current line');
     await page.waitFor(`${moves('Sicilian')} === 2 && ${moves('French Defence')} === 9`, { what: 'the line in Sicilian, its 1. e4 in both groups' });
+    const buttonOf = (name, label) => `[...${folder(name)}.querySelectorAll('.rep-group-head button')].find(b => b.textContent.trim() === ${JSON.stringify(label)})`;
+    // Learn and Drill side by side; only learned lines are drilled: nothing to drill yet
+    const sideBySide = await page.eval(`(([a, b]) => Math.abs(a.top - b.top) < 2 && Math.abs(a.right - b.left) < 6)(['Learn', 'Drill'].map(l => [...${folder('French Defence')}.querySelectorAll('.rep-group-head button')].find(b => b.textContent.trim() === l).getBoundingClientRect()))`);
+    assert(sideBySide, 'Learn and Drill side by side');
+    assert(await page.eval(`${buttonOf('French Defence', 'Drill')}.disabled && !${buttonOf('French Defence', 'Learn')}.disabled`), 'no learned lines yet: Drill is off, Learn is on');
+    assert(/0\/2 learned/.test(await page.eval(`${folder('French Defence')}.querySelector('.rep-group-count').innerText`)), 'the group’s two lines, none learned');
+    // Learn: the app gives the moves one by one, the student repeats them; a wrong move goes back; in-betweens from memory
+    await page.eval(`(() => { window.ccPings = 0; const start = OscillatorNode.prototype.start; OscillatorNode.prototype.start = function (...a) { window.ccPings++; return start.apply(this, a); }; return true; })()`);
+    await page.eval(`${buttonOf('French Defence', 'Learn')}.click()`);
+    await page.waitFor(`/Your move: e6/.test(document.querySelector('.feedback')?.innerText || '')`, { timeout: 8000, what: 'the first move given, after 1. e4' });
+    await page.clickSquare('.board-area .cg-wrap', 'a7', 'black');
+    await page.clickSquare('.board-area .cg-wrap', 'a6', 'black');
+    await page.waitFor(`/Not a6\\. Play e6/.test(document.querySelector('.feedback')?.innerText || '')`, { what: 'a wrong move answered' });
+    await sleep(900);
+    const pops = await learnToTheEnd(page, 'black');
+    assert(pops.length === 2 && pops.every(p => /Line learned/.test(p)) && pops.some(p => /2 of 2/.test(p)), `the pop-ups: ${JSON.stringify(pops)}`);
+    assert((await page.eval('window.ccPings')) === 8, `a ping (two notes, each with its overtone) for each line learned: ${await page.eval('window.ccPings')}`);
+    await page.click('button', 'Stop learning');
+    await page.waitFor(`/2\\/2 learned/.test(${folder('French Defence')}.querySelector('.rep-group-count').innerText) && ${buttonOf('French Defence', 'Learn')}.disabled && !${buttonOf('French Defence', 'Drill')}.disabled`, { what: 'the group learned' });
+    assert(await page.eval(`${buttonOf('Sicilian', 'Drill')}.disabled && !${buttonOf('Sicilian', 'Learn')}.disabled`), 'the other group: nothing learned, nothing to drill');
     // the French Defence drilled on its own: the Sicilian's 1...c5 is not one of its moves
     await page.eval(`[...${folder('French Defence')}.querySelectorAll('.rep-group-head button')].find(b => b.textContent.trim() === 'Drill').click()`);
     await page.waitFor(`/Play your repertoire moves: French Defence/.test(document.querySelector('.feedback')?.innerText || '')`, { what: 'the drill of French Defence' });
@@ -727,6 +812,122 @@ async function main() {
     await ask(page, 'What am I reading?');
     await page.waitFor(`/reading: /.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 20000, what: 'the coach reading where the student is' });
     assert((await term(page)).includes('reading: ok'), `the coach at the student's place: ${(await term(page)).slice(-300)}`);
+  });
+
+  await step('going through a line: a sound for every move, back too; holding a key runs through every move, none skipped, and stops when it is let go', async () => {
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 900, deviceScaleFactor: 1, mobile: false });
+    await go(page, '#/analysis');
+    await page.waitFor(`[...document.querySelectorAll('.xterm-helper-textarea')].some(t => t.offsetParent)`, { what: 'the coach panel' });
+    await ask(page, 'Please show the long line');
+    await page.waitFor(`/long line: ok/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 15000, what: 'the line on the board' });
+    await page.click('.side-col.middle .tab', 'Moves');
+    await page.waitFor(`document.querySelector('.movelist .active')?.textContent.includes('b4')`, { timeout: 10000, what: 'the end of the line' });
+    await sleep(400);
+    await page.eval(`(() => {
+      window.ccS = { sounds: 0, seen: [], on: true };
+      for (const [proto, name] of [[HTMLMediaElement.prototype, 'play'], [AudioBufferSourceNode.prototype, 'start']]) { const f = proto[name]; proto[name] = function (...a) { window.ccS.sounds++; return f.apply(this, a); }; }
+      const look = () => { if (!window.ccS.on) return; const k = [...document.querySelectorAll('.board-area cg-board piece:not(.fading)')].map(p => p.cgKey + [...p.classList].filter(c => /^(white|black|pawn|knight|bishop|rook|queen|king)$/.test(c)).sort()).sort().join(); if (window.ccS.seen.at(-1)?.k !== k) window.ccS.seen.push({ k, t: performance.now() }); requestAnimationFrame(look); };
+      look();
+      return true;
+    })()`);
+    const seen = `window.ccS.seen.length`;
+    await page.eval(`(document.activeElement?.blur(), true)`); // (the keys go to the terminal while it has the focus)
+    // a tap back: one move, its sound; a tap on: the same
+    await page.press('ArrowLeft');
+    await page.waitFor(`document.querySelector('.movelist .active')?.textContent.includes('g5')`, { what: 'one move back' });
+    await page.press('ArrowRight');
+    await page.waitFor(`document.querySelector('.movelist .active')?.textContent.includes('b4')`, { what: 'one move on' });
+    await sleep(300);
+    assert((await page.eval('window.ccS.sounds')) === 2, `a sound for each way: ${await page.eval('window.ccS.sounds')}`);
+    // held back to the start, then on to the end: all 24 moves, each drawn, each with its sound
+    await page.eval(`(window.ccS.seen = window.ccS.seen.slice(-1), window.ccS.sounds = 0, true)`);
+    await holdKey(page, 'ArrowLeft', 1500);
+    const released = await page.eval('performance.now()');
+    await sleep(500);
+    const back = await page.eval(`({ n: ${seen}, sounds: window.ccS.sounds, last: window.ccS.seen.at(-1).t, active: !!document.querySelector('.movelist .active') })`);
+    assert(back.n === 25 && back.sounds === 24 && !back.active, `held back: ${JSON.stringify(back)}`);
+    assert(back.last <= released + 60, `nothing moved after the key was let go (${Math.round(back.last - released)} ms)`);
+    await page.eval(`(window.ccS.seen = window.ccS.seen.slice(-1), window.ccS.sounds = 0, true)`);
+    await holdKey(page, 'ArrowRight', 1500);
+    await sleep(400);
+    const on = await page.eval(`({ n: ${seen}, sounds: window.ccS.sounds, text: document.querySelector('.movelist .active')?.textContent })`);
+    assert(on.n === 25 && on.sounds === 24 && /b4/.test(on.text), `held on: ${JSON.stringify(on)}`);
+    await page.eval(`(window.ccS.on = false, true)`);
+  });
+
+  await step('panels resized by pulling on their sides: what grows takes the room of its neighbour, within limits', async () => {
+    const widths = `(() => ({ board: document.querySelector('.board-wrap').offsetWidth, mid: document.querySelector('.side-col.middle').offsetWidth, side: document.querySelector('.side-col:not(.middle)').offsetWidth, scroll: document.querySelector('.workspace').scrollWidth - document.querySelector('.workspace').clientWidth }))()`;
+    const start = await page.eval(widths);
+    assert(start.board > 300 && start.mid >= 270 && start.side >= 340, `the default layout: ${JSON.stringify(start)}`);
+    assert((await page.eval(`document.querySelector('.workspace').style.cssText`)) === '', 'nothing set before the student resizes');
+    await drag(page, '.board-col > .split', -120);
+    const smaller = await page.eval(widths);
+    assert(Math.abs(smaller.board - (start.board - 120)) <= 2 && Math.abs(smaller.mid - (start.mid + 120)) <= 2 && smaller.side === start.side, `the board smaller, the column beside it bigger: ${JSON.stringify(smaller)}`);
+    await drag(page, '.side-col.middle > .split', -60);
+    const mid = await page.eval(widths);
+    assert(Math.abs(mid.mid - (smaller.mid - 60)) <= 2 && Math.abs(mid.side - (smaller.side + 60)) <= 2 && mid.board === smaller.board, `the middle column and the side: ${JSON.stringify(mid)}`);
+    // the limits: dragged as far as can be, nothing breaks
+    await drag(page, '.board-col > .split', -2000);
+    const least = await page.eval(widths);
+    assert(least.board === 260 && least.scroll <= 0, `the smallest board: ${JSON.stringify(least)}`);
+    await drag(page, '.board-col > .split', 2000);
+    const most = await page.eval(widths);
+    assert(most.mid >= 220 && most.board <= 900 - 50 - 118 && most.scroll <= 0, `the largest board: ${JSON.stringify(most)}`);
+    await drag(page, '.side-col.middle > .split', 2000);
+    const wide = await page.eval(widths);
+    assert(wide.side >= 340 && wide.scroll <= 0, `the middle column at its largest: ${JSON.stringify(wide)}`);
+    // in the Book reader: the page and the board's column, and the board and the panel under it
+    await go(page, '#/books');
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 4`, { what: 'the books' });
+    await page.click('.book-card', 'PDF · 3 pages');
+    await page.waitFor(`document.querySelector('.book-page-no') && document.querySelector('.bk-pdf .textLayer [data-s]')`, { timeout: 20000, what: 'the book' });
+    const book = `(() => ({ page: document.querySelector('.book-main').offsetWidth, side: document.querySelector('.book-side').offsetWidth, board: document.querySelector('.book-side .board-wrap').offsetWidth, panel: document.querySelector('.book-side .panel.grow').offsetHeight, over: document.querySelector('.book-side').scrollHeight - document.querySelector('.book-side').clientHeight }))()`;
+    const b0 = await page.eval(book);
+    await drag(page, '.book-side > .split', -100);
+    const b1 = await page.eval(book);
+    assert(Math.abs(b1.side - b0.side - 100) <= 2 && Math.abs(b0.page - b1.page - 100) <= 2, `the column bigger, the page smaller: ${JSON.stringify([b0, b1])}`);
+    await drag(page, '.book-side .split-y', -80, -80);
+    const b2 = await page.eval(book);
+    assert(b2.board < b1.board && b2.panel > b1.panel && b2.over <= 0, `the board smaller, the panel under it bigger: ${JSON.stringify([b1, b2])}`);
+    await drag(page, '.book-side .split-y', 0, 2000);
+    const b3 = await page.eval(book);
+    assert(b3.panel >= 190 && b3.over <= 0, `the largest board: ${JSON.stringify(b3)}`);
+    await page.send('Emulation.clearDeviceMetricsOverride');
+  });
+
+  await step('book reader: the coach under the board, a toggle with the moves — a quick request for the page, the reading paused by asking, a position it shows and the student’s answer', async () => {
+    assert(await page.eval(`!!document.querySelector('.book-side .book-engine') && !document.querySelector('.book-side .term-coach')`), 'the moves first');
+    await page.click('.book-side .tab', 'Coach');
+    await page.waitFor(`document.querySelector('.book-side .term-coach .xterm-rows') && !document.querySelector('.book-side .book-engine')`, { what: 'the coach’s panel' });
+    const head = await page.eval(`[...document.querySelector('.book-side .term-coach .panel-head').querySelectorAll('button')].map(b => b.textContent.trim()).join()`);
+    assert(head === 'Moves,Coach', `its head: ${head}`);
+    assert(/tokens or credits/.test(await page.eval(`document.querySelector('.book-side .coach-disclaimer').innerText`)), 'the disclaimer');
+    // the reading pauses when the student goes to ask
+    await page.click('.book-play');
+    await page.waitFor(`document.querySelector('.book-play').innerText.includes('Pause')`, { what: 'the reading' });
+    await page.eval(`(document.querySelector('.book-side .term-box').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })), true)`);
+    await page.waitFor(`!document.querySelector('.book-play').innerText.includes('Pause')`, { what: 'the reading paused' });
+    await page.click('.book-side .quick .btn', 'Explain this page');
+    await page.waitFor(`/explained: page \\d+ read/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 20000, what: 'the page explained' });
+    // a position the coach shows, with its question: the student's move is its answer, its reply goes on from it
+    await ask(page, 'Please quiz me from the book');
+    await page.waitFor(`/quiz seen: waiting/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 15000, what: 'the question' });
+    await page.waitFor(`/Your turn/.test(document.querySelector('.book-side .board-banner')?.innerText || '') && /From your book/.test(document.querySelector('.book-status')?.innerText || '') && document.querySelector('.book-side svg g[cgHash]')`, { what: 'the banner, the caption and the arrow' });
+    await sleep(300);
+    const orient = await page.eval(`document.querySelector('.book-side .cg-wrap').classList.contains('orientation-black') ? 'black' : 'white'`);
+    await page.clickSquare('.book-side .board-area .cg-wrap', 'a7', orient);
+    await page.clickSquare('.book-side .board-area .cg-wrap', 'a6', orient);
+    await page.waitFor(`/answer heard: 3\\.\\.\\. ?a6/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 15000, what: 'the answer at the coach' });
+    await page.waitFor(`/reply: played/.test(document.querySelector('.xterm-rows')?.innerText || '') && [...document.querySelectorAll('.book-side .board-area cg-board piece')].some(p => p.cgKey === 'a4')`, { timeout: 15000, what: 'the coach’s reply on the reader’s board' });
+    // back to the moves: the student's line with the coach's reply; the choice is kept
+    await page.click('.book-side .tab', 'Moves');
+    await page.waitFor(`document.querySelector('.book-side .movelist .active')?.textContent.includes('Ba4') && document.querySelector('.book-side .book-engine')`, { what: 'the moves, the reply among them' });
+    await page.click('.book-side .tab', 'Coach');
+    await go(page, '#/books');
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 4`, { what: 'the books' });
+    await page.click('.book-card', 'PDF · 3 pages');
+    await page.waitFor(`document.querySelector('.book-side .term-coach')`, { timeout: 20000, what: 'the coach’s tab, kept' });
+    await page.click('.book-side .tab', 'Moves');
   });
 
   await step('settings: the coach’s notes, the coach programs, the data folder; no move comments, Lichess token or 1.x import', async () => {

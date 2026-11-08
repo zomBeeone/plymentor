@@ -115,6 +115,17 @@ CREATE TABLE IF NOT EXISTS repertoire_group_moves (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS repertoire_group_moves_move ON repertoire_group_moves(move_id);
 
+-- how far the student has learned a repertoire's lines (Openings → Learn): a line is its moves from the initial position
+-- (uci, a space between them); gone through once and drilled right twice, it is learned
+CREATE TABLE IF NOT EXISTS repertoire_lines (
+  color TEXT NOT NULL,
+  line TEXT NOT NULL,
+  shown INTEGER NOT NULL DEFAULT 0,
+  drilled INTEGER NOT NULL DEFAULT 0,
+  learned_at INTEGER,
+  PRIMARY KEY (color, line)
+) WITHOUT ROWID;
+
 CREATE TABLE IF NOT EXISTS exercises (
   id INTEGER PRIMARY KEY,
   fen TEXT NOT NULL UNIQUE,

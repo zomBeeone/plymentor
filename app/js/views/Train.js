@@ -3,6 +3,8 @@ import { html, useEffect, useRef, useState } from '../../vendor/preact.js';
 import { get, post, del } from '../api.js';
 import { setState, toast, useStore, coachReady } from '../store.js';
 import { BoardCtrl, useCtrl, useBoardKeys, useForce } from '../ctrl.js';
+import { holdable } from '../hold.js';
+import { useBoardSplits } from '../components/Split.js';
 import { Tree, placeCoachPosition } from '../tree.js';
 import { Board } from '../components/Board.js';
 import { MoveList } from '../components/MoveList.js';
@@ -66,6 +68,7 @@ export function Train({ route }) {
 // ---------------------------------------------------------------------------------------------
 
 function Exercises() {
+  const split = useBoardSplits('train');
   const s = useStore();
   const rerender = useForce();
   const coach = useCoachHandle();
@@ -206,8 +209,9 @@ function Exercises() {
   const total = ex.list?.length || 0;
   const due = (ex.list || []).filter(e => !e.due || e.due <= Date.now()).length;
 
-  return html`<div class="workspace two">
+  return html`<div class="workspace two" ref=${split.root}>
     <div class="board-col">
+      ${split.board}
       <div class="board-area">
         ${cur
           ? html`<${Board} fen=${ex.fen} orientation=${orientation} lastMove=${ex.lastMove} movable=${ex.solved ? false : orientation} onMove=${onMove} shapes=${ex.shapes} />`
@@ -279,6 +283,7 @@ function Exercises() {
 // ---------------------------------------------------------------------------------------------
 
 function Lessons({ route }) {
+  const split = useBoardSplits('train');
   useCtrl(lctrl);
   const s = useStore();
   const rerender = useForce();
@@ -368,16 +373,17 @@ function Lessons({ route }) {
   const caption = lesson.caption && repKey(lesson.caption.fen) === repKey(node.fen) ? lesson.caption.text : null;
   const asking = lesson.question && repKey(lesson.question.fen) === repKey(node.fen);
 
-  return html`<div class="workspace two">
+  return html`<div class="workspace two" ref=${split.root}>
     <div class="board-col">
+      ${split.board}
       <div class="board-area">
         <${Board} fen=${node.fen} orientation=${lctrl.orientation} lastMove=${lctrl.lastMove} movable="both" onMove=${onMove} shapes=${shapes} banner=${asking ? 'Your move — what would you play?' : null} />
       </div>
       ${caption && html`<div class="board-caption">${caption}</div>`}
       <div class="board-controls">
         <button class="btn icon" onClick=${() => lctrl.first()}>⏮</button>
-        <button class="btn icon" onClick=${() => lctrl.prev()}>◀</button>
-        <button class="btn icon" onClick=${() => lctrl.next()}>▶</button>
+        <button class="btn icon" ...${holdable(() => lctrl.prev())}>◀</button>
+        <button class="btn icon" ...${holdable(() => lctrl.next())}>▶</button>
         <button class="btn icon" onClick=${() => lctrl.last()}>⏭</button>
         <button class="btn icon" onClick=${() => lctrl.flip()}>⇅</button>
       </div>

@@ -1,7 +1,8 @@
 // Board + move-tree controller shared by the board views, and small hooks.
 import { useEffect, useState } from '../vendor/preact.js';
 import { Tree } from './tree.js';
-import { moveSound } from './sound.js';
+import { moveSound, backSound } from './sound.js';
+import { pressKey, release } from './hold.js';
 
 export class BoardCtrl {
   constructor(startFen) {
@@ -39,11 +40,19 @@ export class BoardCtrl {
     this.emit();
     return r;
   }
+  /** One move back; false at the start of the line. */
   prev() {
-    if (this.node.parent) this.goto(this.node.parent);
+    const { node } = this;
+    if (!node.parent) return false;
+    backSound(node);
+    this.goto(node.parent);
+    return true;
   }
+  /** One move on; false at the end of the line. */
   next() {
-    if (this.node.children[0]) this.goto(this.node.children[0], { sound: true });
+    if (!this.node.children[0]) return false;
+    this.goto(this.node.children[0], { sound: true });
+    return true;
   }
   first() {
     this.goto(this.tree.root);
@@ -69,7 +78,7 @@ export function useCtrl(ctrl) {
   return ctrl;
 }
 
-/** ← → ↑ ↓ Home End navigate, f flips. Ignored while typing. */
+/** ← → (held: through the moves, see hold.js) ↑ ↓ Home End navigate, f flips. Ignored while typing. */
 export function useBoardKeys(ctrl, extra) {
   useEffect(() => {
     const onKey = e => {
@@ -77,8 +86,8 @@ export function useBoardKeys(ctrl, extra) {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const k = e.key;
-      if (k === 'ArrowLeft') ctrl.prev();
-      else if (k === 'ArrowRight') ctrl.next();
+      if (k === 'ArrowLeft') pressKey(e, () => ctrl.prev());
+      else if (k === 'ArrowRight') pressKey(e, () => ctrl.next());
       else if (k === 'ArrowUp' || k === 'Home') ctrl.first();
       else if (k === 'ArrowDown' || k === 'End') ctrl.last();
       else if (k === 'f') ctrl.flip();
@@ -86,7 +95,10 @@ export function useBoardKeys(ctrl, extra) {
       e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      release();
+    };
   }, [ctrl]);
 }
 

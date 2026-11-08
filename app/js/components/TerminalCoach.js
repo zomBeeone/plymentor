@@ -89,22 +89,29 @@ export function TerminalCoach(props) {
       <button class="btn primary" onClick=${restartCoach}>Start the coach</button>
     </div>`;
 
+  // (small: a panel sharing its place with others — props.tabs, in place of the title — on a screen where the coach does
+  // not talk, the Book reader's)
+  const { small, tabs } = props;
   return html`
-    <div class="panel coach term-coach">
+    <div class=${cls('panel coach term-coach', small && 'small')}>
       <div class="panel-head">
-        <span class="coach-title grow ellipsis">${props.title || 'Coach'} <span class="muted">· ${label}</span></span>
+        ${tabs
+          ? html`${tabs}<span class="spacer"></span>`
+          : html`<span class="coach-title grow ellipsis">${props.title || 'Coach'} <span class="muted">· ${label}</span></span>`}
         <span class=${cls('pill', pillKind)}>${pill}</span>
-        ${s.coachSpeaking && html`<button class="btn small ghost" title="Stop talking (the coach keeps working)" onClick=${stopSpeaking}>Quiet</button>`}
-        <button
+        ${!small && s.coachSpeaking && html`<button class="btn small ghost" title="Stop talking (the coach keeps working)" onClick=${stopSpeaking}>Quiet</button>`}
+        ${!small &&
+        html`<button
           class=${cls('btn small voice-toggle', voiceOn ? 'on' : 'ghost', s.coachSpeaking && 'speaking')}
           title=${voiceOn ? 'Coach voice is on — click to mute' : 'Coach voice is off — click to hear your coach talk'}
           aria-pressed=${voiceOn}
           onClick=${() => setVoiceEnabled(!voiceOn)}
-        >${voiceOn ? '🔊' : '🔇'}</button>
+        >${voiceOn ? '🔊' : '🔇'}</button>`}
         ${st.busy && html`<button class="btn small" title="Interrupt the coach (Esc)" onClick=${interruptCoach}>Stop</button>`}
-        <button class="btn small ghost" disabled=${cantAsk} title="Start a fresh coaching session (the coach keeps its notes about you)" onClick=${() => confirm('Start a new coaching session? The conversation in the terminal is closed; the coach keeps its notes about you.') && restartCoach()}>
+        ${!small &&
+        html`<button class="btn small ghost" disabled=${cantAsk} title="Start a fresh coaching session (the coach keeps its notes about you)" onClick=${() => confirm('Start a new coaching session? The conversation in the terminal is closed; the coach keeps its notes about you.') && restartCoach()}>
           Restart
-        </button>
+        </button>`}
       </div>
       <div class="term-wrap">
         <div class="term-box" ref=${box} onClick=${focusTerminal}></div>
@@ -121,9 +128,10 @@ export function TerminalCoach(props) {
               q => html`<button class="btn" disabled=${cantAsk} onClick=${() => coachRequest(q.task ? { task: q.task, taskArgs: q.taskArgs?.() } : { text: `[App] ${q.text || q.label}` })}>${q.label}</button>`,
             )}</div>`
           : null}
-        <div class="coach-foot" title=${s.host?.providers?.[st.provider]?.account ? `Runs on ${s.host.providers[st.provider].account}` : ''}>
+        ${!small &&
+        html`<div class="coach-foot" title=${s.host?.providers?.[st.provider]?.account ? `Runs on ${s.host.providers[st.provider].account}` : ''}>
           <span>Click the terminal to type · Ctrl+C copies a selection</span>
-        </div>
+        </div>`}
         <div class="coach-disclaimer">Your coach uses your AI account's tokens or credits. Studio Nox takes no responsibility for any costs.</div>
       </div>
     </div>

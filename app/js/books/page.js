@@ -57,11 +57,17 @@ class Page {
       else if (x > 0.8) this.handlers.onTurn(1);
     };
     root.addEventListener('click', this.onClick);
-    this.resize = new ResizeObserver(() => this.resized());
+    this.resize = new ResizeObserver(() => {
+      clearTimeout(this.resizing);
+      // (the student pulling the panel's side: drawn again when they stop, a PDF's page being slow to draw)
+      if (document.body.classList.contains('resizing')) this.resizing = setTimeout(() => this.resized(), 150);
+      else this.resized();
+    });
     this.resize.observe(root);
   }
 
   destroy() {
+    clearTimeout(this.resizing);
     this.resize.disconnect();
     this.root.removeEventListener('click', this.onClick);
     this.root.replaceChildren();

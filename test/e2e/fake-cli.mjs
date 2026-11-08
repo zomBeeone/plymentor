@@ -131,7 +131,7 @@ async function handle(text) {
     say(`opening shown: ${set.isError ? `ERROR ${set.text}` : 'ok'}`);
     return;
   }
-  if (/\[App\] Explain/.test(text)) {
+  if (/\[App\] Explain the/.test(text)) {
     const b = await call('get_board_state', {});
     say(`explain: ${b.text.split('\n').find(l => l.startsWith('Current position')) || b.text.split('\n')[0]}`);
     return;
@@ -198,6 +198,31 @@ async function handle(text) {
     const now = await call('search_books', { query: 'Ruy Lopez', book: fresh });
     check('search now', /found in 1 place/.test(now.text) && !/Not searched/.test(now.text), now);
     say(`Books done: ${failed.length ? failed.join(', ') : 'all ok'}.`);
+    return;
+  }
+  if (/show the long line/i.test(text)) {
+    const moves = 'e4 c5 Nf3 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6 Be3 e5 Nb3 Be6 f3 Be7 Qd2 O-O O-O-O Nbd7 g4 b5 g5 b4'.split(' ');
+    const r = await call('set_board', { moves_from_start: moves });
+    say(`long line: ${r.isError ? `ERROR ${r.text.slice(0, 60)}` : 'ok'}`);
+    return;
+  }
+  if (/\[App\] Explain page (\d+) of the book/.test(text)) {
+    const page = Number(/page (\d+) of the book/.exec(text)[1]);
+    const r = await call('read_book', { page });
+    say(`explained: page ${page} ${r.isError ? `ERROR ${r.text.slice(0, 60)}` : 'read'}`);
+    return;
+  }
+  if (/quiz me from the book/i.test(text)) {
+    const r = await call('set_board', { fen: 'r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3', caption: 'From your book', ask_move: true, arrows: ['b5c6 g'] });
+    say(`quiz: ${r.isError ? `ERROR ${r.text.slice(0, 60)}` : 'asked'}`);
+    const b = await call('get_board_state', {});
+    say(`quiz seen: ${/You asked the student to find a move/.test(b.text) ? 'waiting' : '?'}`);
+    return;
+  }
+  if (/^My answer: /.test(text)) {
+    say(`answer heard: ${text.slice(11, 24)}`);
+    const r = await call('make_move', { moves: ['Ba4'] });
+    say(`reply: ${r.isError ? `ERROR ${r.text.slice(0, 60)}` : 'played'}`);
     return;
   }
   if (/what am i reading/i.test(text)) {

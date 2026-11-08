@@ -4,6 +4,8 @@ import { html, useEffect, useState } from '../../vendor/preact.js';
 import { api, get, post, qs } from '../api.js';
 import { state, toast, useStore, coachReady } from '../store.js';
 import { BoardCtrl, useCtrl, useBoardKeys, useMedia, useForce } from '../ctrl.js';
+import { holdable } from '../hold.js';
+import { useBoardSplits } from '../components/Split.js';
 import { Tree, placeCoachPosition, commentsOf } from '../tree.js';
 import { engine, useLiveEval, engineSwitches, setEngineSwitch, useEngineSwitch } from '../engine.js';
 import { Board, glyphShape } from '../components/Board.js';
@@ -370,6 +372,7 @@ export function Analysis({ route }) {
   const engineOn = useEngineSwitch('board');
   const live = useLiveEval(engineOn && !p ? node.fen : '__off__');
   const compact = useMedia('(max-width: 1280px)');
+  const split = useBoardSplits('analysis');
   const [modal, setModal] = useState(null);
 
   useEffect(() => {
@@ -643,8 +646,9 @@ export function Analysis({ route }) {
   const compactTab = compactTabs.some(([id]) => id === ui.compactTab) ? ui.compactTab : 'coach';
 
   return html`
-    <div class="workspace">
+    <div class="workspace" ref=${split.root}>
       <div class="board-col">
+        ${split.board}
         <div class="board-area">
           ${!p && s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${scoreForBar} fen=${node.fen} off=${!engineOn} orientation=${ctrl.orientation} />`}
           <${Board}
@@ -660,8 +664,8 @@ export function Analysis({ route }) {
         ${caption ? html`<div class="board-caption">${caption}</div>` : p?.goal && html`<div class="board-caption goal"><span class="muted">Your coach's goal:</span> ${p.goal}</div>`}
         <div class="board-controls">
           <button class="btn icon" title="First (↑)" onClick=${() => ctrl.first()}>⏮</button>
-          <button class="btn icon" title="Back (←)" onClick=${() => ctrl.prev()}>◀</button>
-          <button class="btn icon" title="Forward (→)" onClick=${() => ctrl.next()}>▶</button>
+          <button class="btn icon" title="Back (←)" ...${holdable(() => ctrl.prev())}>◀</button>
+          <button class="btn icon" title="Forward (→)" ...${holdable(() => ctrl.next())}>▶</button>
           <button class="btn icon" title="Last (↓)" onClick=${() => ctrl.last()}>⏭</button>
           <button class="btn icon" title="Flip board (f)" onClick=${() => ctrl.flip()}>⇅</button>
           ${back && html`<button class="btn small blue" onClick=${restoreStash}>↩ Back to ${back.label}</button>`}
@@ -683,6 +687,7 @@ export function Analysis({ route }) {
       </div>
       ${!compact &&
       html`<div class="side-col middle">
+        ${split.middle}
         ${p
           ? html`<div class="panel grow">
               <div class="panel-head"><span class="title">Training game</span><span class="spacer"></span><span class="muted ellipsis" style="font-size:12px">vs ${p.levelLabel} · you play ${p.color}</span></div>

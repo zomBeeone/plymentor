@@ -16,11 +16,14 @@ import { MoveList } from '../components/MoveList.js';
 import { EvalBar } from '../components/EvalBar.js';
 import { EnginePanel } from '../components/EnginePanel.js';
 import { engine, useLiveEval, engineSwitches, setEngineSwitch, useEngineSwitch } from '../engine.js';
-import { moveSound } from '../sound.js';
+import { moveSound, backSound } from '../sound.js';
+import { pressKey, release, holdable } from '../hold.js';
 import { readingEngine, warmReading, stopSpeaking } from '../voice.js';
-import { useCoachScreen } from '../coachTerm.js';
+import { useCoachScreen, coachRequest } from '../coachTerm.js';
+import { CoachPanel } from '../components/CoachPanel.js';
+import { useReaderSplits } from '../components/Split.js';
 import { Tree, placeCoachPosition } from '../tree.js';
-import { INITIAL_FEN } from '../chess.js';
+import { INITIAL_FEN, repKey } from '../chess.js';
 import { listBooks, addBook, getBook, saveBook, coverUrl } from '../books/library.js';
 import { holdBook, forgetBook, Reading } from '../books/reader.js';
 import { hiddenSquares } from '../books/moves.js';
@@ -126,7 +129,7 @@ function Library() {
         too, and the board plays each move as the reading gets to it and shows the book's diagrams. Click a sentence to read from there, or a move or a diagram to see it on
         the board. Try moves of your own on the board too, or go back and on through the moves with ← and →: the reading pauses, and once it goes on, the board comes
         back to the book with its next move. Type a page's number to go straight to it. Scanned books are read too (their text is recognised on this computer, which
-        takes a while). Your coach can look things up in your books and read their pages for you. Your books stay on this computer: only the pages your coach reads go,
+        takes a while). Your coach, in the Coach tab under the board, can look things up in your books and read their pages for you. Your books stay on this computer: only the pages your coach reads go,
         with your conversation, to its AI service.
       </p>
       ${books && !books.length
@@ -164,6 +167,11 @@ function Reader({ id }) {
   const pageNo = useRef();
   // a PDF page: whole ('page'), as wide as the panel ('width'), or a share of the panel's width (a number, in %)
   const [zoom, setZoom] = useState(() => stored('books.zoom', 'page'));
+  // the panel under the board: the book's moves (with Stockfish's lines), or the coach
+  const [side, setSide] = useState(() => (stored('books.side', 'moves') === 'coach' ? 'coach' : 'moves'));
+  // what the coach put on the board last: { fen, shapes, caption, ask (it waits for the student's move there) }
+  const coachMark = useRef(null);
+  const split = useReaderSplits();
   // a diagram the student sets right on the board editor: { diagram, placement, side }
   const [editing, setEditing] = useState(null);
   const editingRef = useRef(null);
@@ -365,13 +373,15 @@ function Reader({ id }) {
    */
   const stepMove = dir => {
     const v = viewRef.current;
-    if (!v) return;
+    if (!v) return false;
     const end = endOf(v.node, v);
     const to = dir < 0 ? v.node.parent : nextOf(v.node, end);
-    if (!to) return;
+    if (!to) return false;
     hold();
     if (dir > 0) moveSound(to);
+    else backSound(v.node);
     setBrowse({ tree: v.tree, node: to, own: !!v.own, end });
+    return true;
   };
   /** A move of the move list the student clicked: the board shows it, the reading pauses. */
   const select = n => {
@@ -400,6 +410,12 @@ function Reader({ id }) {
     moveSound(added.node);
     hold();
     setBrowse({ tree, node: added.node, own: true });
+    // (the coach asked for a move in this position: this is the answer)
+    const mark = coachMark.current;
+    if (mark?.ask && repKey(mark.fen) === repKey(from.fen)) {
+      mark.ask = false;
+      coachRequest({ text: `My answer: ${added.node.label}` });
+    }
   };
 
   useEffect(() => {
@@ -441,18 +457,28 @@ function Reader({ id }) {
       const v = viewRef.current;
       if (!r || !meta.current) return null;
       const where = r.book.format === 'pdf' ? `page ${r.at.unit + 1} of ${r.book.count}` : `chapter ${r.at.unit + 1} of ${r.book.count} (“${r.book.titles[r.at.unit]}”)`;
-      const board = v?.own
-        ? "the student is trying out moves of their own on its board, from the book's position (the reading's next move brings the book's position back)"
-        : 'its board shows the position the reading has reached';
+      const board = v?.coach
+        ? 'its board shows the position you put there'
+        : v?.own
+          ? "the student is trying out moves of their own on its board, from the book's position (the reading's next move brings the book's position back)"
+          : 'its board shows the position the reading has reached';
       const note = `The student is reading the chess book “${meta.current.title}”${meta.current.author ? ` by ${meta.current.author}` : ''} in the Book reader, ${where}; ${board}. read_book gives you the text.`;
       if (!v) return { mode: 'book', ucis: [], note }; // (the board shows the initial position until the book's first move)
-      return { mode: 'book', startFen: v.tree.isStandardStart ? undefined : v.tree.startFen, ucis: v.tree.ucis(v.node), note };
+      const mark = coachMark.current;
+      return { mode: 'book', startFen: v.tree.isStandardStart ? undefined : v.tree.startFen, ucis: v.tree.ucis(v.node), note, question: mark?.ask && repKey(mark.fen) === repKey(v.node.fen) ? true : undefined };
     },
     ev => {
       if (ev.action !== 'set_board') return false;
-      const { tree, node } = placeCoachPosition(new Tree(), ev);
+      // (on the student's own line the coach's moves go on from it; the book's trees stay as the book has them)
+      const v = viewRef.current;
+      const mine = v?.own ? v.tree : new Tree();
+      const { tree, node } = placeCoachPosition(mine, ev, { current: v?.own ? v.node : null });
       if (ev.line?.length) tree.addLine(node, ev.line.map(m => m.uci));
-      setBrowse({ tree, node });
+      if (ev.orientation) setOrientation(ev.orientation);
+      coachMark.current = { fen: ev.fen, shapes: ev.shapes || [], caption: ev.caption || null, ask: !!ev.askMove };
+      // (the reading's next move would take the coach's position away)
+      hold();
+      setBrowse({ tree, node, own: !!v?.own && tree === mine, coach: true });
       return true;
     },
   );
@@ -469,7 +495,7 @@ function Reader({ id }) {
         // (the board's moves, as on the app's other boards; with Shift, the sentences)
         const dir = e.key === 'ArrowRight' ? 1 : -1;
         if (e.shiftKey) r.step(dir);
-        else stepMove(dir);
+        else pressKey(e, () => stepMove(dir));
       } else if (e.key === 'PageDown') turn(1);
       else if (e.key === 'PageUp') turn(-1);
       else if (e.key === 'g' && r.book.format === 'pdf') pageNo.current?.focus();
@@ -479,7 +505,10 @@ function Reader({ id }) {
       e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      release();
+    };
   }, []);
 
   // Stockfish on the board (the Book reader's own switch): its evaluation bar, its lines and its best move's arrow
@@ -511,7 +540,22 @@ function Reader({ id }) {
   // (the diagram whose position the board shows: one the student may set right)
   const diagramShown = !browse && move?.kind === 'diagram' && move.node === node ? move : null;
   const best = engineOn && live?.lines?.[0]?.pv?.[0];
-  const shapes = best && s.settings?.board?.bestArrow !== false ? [{ orig: best.slice(0, 2), dest: best.slice(2, 4), brush: 'paleBlue' }] : [];
+  // (what the coach put on this position: its arrows, its caption, the move it waits for)
+  const mark = node && coachMark.current && repKey(coachMark.current.fen) === repKey(node.fen) ? coachMark.current : null;
+  const shapes = [...(best && s.settings?.board?.bestArrow !== false ? [{ orig: best.slice(0, 2), dest: best.slice(2, 4), brush: 'paleBlue' }] : []), ...(mark?.shapes || [])];
+  const noun = book?.format === 'epub' ? 'chapter' : 'page';
+  const quick = [
+    { label: `Explain this ${noun}`, task: 'bookPage', taskArgs: () => ({ noun, number: at.unit + 1 }) },
+    { label: 'Explain this position', task: 'explain' },
+  ];
+  const chooseSide = id => {
+    setSide(id);
+    store('books.side', id);
+  };
+  const tabs = html`<div class="tabs">
+    <button class=${cls('tab', side === 'moves' && 'active')} onClick=${() => chooseSide('moves')}>Moves</button>
+    <button class=${cls('tab', side === 'coach' && 'active')} onClick=${() => chooseSide('coach')}>Coach${side !== 'coach' && s.coachStatus?.busy ? html`<span class="tab-busy" title="Your coach is working"></span>` : ''}</button>
+  </div>`;
   const scanning = book?.scanning;
   const loading = book && book.loaded < book.count && !scanning;
   const zoomPct = typeof zoom === 'number' ? zoom : p?.percent || 100;
@@ -531,7 +575,7 @@ function Reader({ id }) {
           ? `Paused${own ? ' for your moves' : ''} — ▶ Continue reads on; the board goes back to the book with its next move`
           : 'Paused — press ▶ or Space to read';
 
-  return html`<div class="book-reader">
+  return html`<div class="book-reader" ref=${split.root}>
     <div class="book-main">
       <div class="book-head">
         <a class="btn small ghost" href="#/books" title="Your books">← Books</a>
@@ -585,6 +629,7 @@ function Reader({ id }) {
       <div class="book-page" ref=${pageEl}>${!book ? html`<div class="empty"><span class="spinner"></span></div>` : null}</div>
     </div>
     <div class="book-side">
+      ${split.page}
       ${editing
         ? html`<${BoardEditor}
             key=${`${editing.diagram.unit}/${editing.diagram.index}`}
@@ -597,7 +642,7 @@ function Reader({ id }) {
           />`
         : html`<div class="board-area">
             ${s.settings?.board?.evalBar !== false && html`<${EvalBar} score=${engineOn ? live?.lines?.[0]?.score || null : null} fen=${node?.fen} off=${!engineOn} orientation=${orientation} />`}
-            <${Board} fen=${node?.fen || INITIAL_FEN} hide=${hiddenSquares(view?.tree, node?.fen)} lastMove=${node?.uci ? [node.uci.slice(0, 2), node.uci.slice(2, 4)] : null} orientation=${orientation} movable="both" onMove=${play} shapes=${shapes} />
+            <${Board} fen=${node?.fen || INITIAL_FEN} hide=${hiddenSquares(view?.tree, node?.fen)} lastMove=${node?.uci ? [node.uci.slice(0, 2), node.uci.slice(2, 4)] : null} orientation=${orientation} movable="both" onMove=${play} shapes=${shapes} banner=${mark?.ask ? 'Your turn — play your answer on the board' : null} />
           </div>`}
       <div class="book-controls">
         <button class="btn icon" title="Previous sentence (Shift + ←)" disabled=${!r} onClick=${() => r.step(-1)}>⏮</button>
@@ -610,8 +655,8 @@ function Reader({ id }) {
         </div>
         <span class="spacer"></span>
         <div class="btn-group book-moves">
-          <button class="btn icon" title="Previous move (←): the reading pauses" disabled=${!node?.parent || !!editing} onClick=${() => stepMove(-1)}>◀</button>
-          <button class="btn icon" title="Next move (→): the reading pauses" disabled=${!next || !!editing} onClick=${() => stepMove(1)}>▶</button>
+          <button class="btn icon" title="Previous move (←): the reading pauses" disabled=${!node?.parent || !!editing} ...${holdable(() => stepMove(-1))}>◀</button>
+          <button class="btn icon" title="Next move (→): the reading pauses" disabled=${!next || !!editing} ...${holdable(() => stepMove(1))}>▶</button>
         </div>
         ${diagramShown &&
         !editing &&
@@ -619,31 +664,36 @@ function Reader({ id }) {
         <button class="btn icon" title="Flip the board (f)" onClick=${() => setOrientation(o => (o === 'white' ? 'black' : 'white'))}>⇅</button>
       </div>
       <div class="book-status muted">
-        ${status}${loading ? html` · <span class="spinner small"></span> finding the moves: ${book.format === 'pdf' ? 'page' : 'chapter'} ${book.loaded} of ${book.count}` : ''}${
+        ${mark?.caption ? html`<span class="book-caption">${mark.caption}</span>` : status}${loading ? html` · <span class="spinner small"></span> finding the moves: ${book.format === 'pdf' ? 'page' : 'chapter'} ${book.loaded} of ${book.count}` : ''}${
           scanning ? html` · <span title="The text of a scanned page is recognised on this computer (OCR); what is read is kept for the next time.">scanned pages read: ${scanning.done} of ${scanning.total}</span>` : ''
         }
       </div>
-      <div class="panel book-engine">
-        <${EnginePanel}
-          fen=${boardFen}
-          data=${live}
-          enabled=${engineOn}
-          onToggle=${() => setEngineSwitch('books', !engineSwitches().books)}
-          multipv=${multipv}
-          onMultipv=${n => {
-            setMultipv(n);
-            store('books.multipv', n);
-          }}
-        />
-      </div>
-      <div class="panel grow">
-        <div class="panel-head"><span class="title">Moves</span><span class="spacer"></span>${browse && (move?.node || own) ? html`<button class="btn small ghost" onClick=${() => setBrowse(null)}>↩ Back to the reading</button>` : null}</div>
-        <div class="panel-body">
-          ${view
-            ? html`<${MoveList} tree=${view.tree} current=${view.node} onSelect=${select} />`
-            : html`<div class="empty"><p class="muted">The moves of the book appear here as the reading gets to them.</p></div>`}
-        </div>
-      </div>
+      ${split.board}
+      ${side === 'coach'
+        ? html`<div class="book-coach" onPointerDown=${e => e.target.closest('.term-box, .quick') && hold()}>
+            <${CoachPanel} small tabs=${tabs} quick=${quick} />
+          </div>`
+        : html`<div class="panel grow">
+            <div class="panel-head">${tabs}<span class="spacer"></span>${browse && (move?.node || own) ? html`<button class="btn small ghost" onClick=${() => setBrowse(null)}>↩ Back to the reading</button>` : null}</div>
+            <div class="book-engine">
+              <${EnginePanel}
+                fen=${boardFen}
+                data=${live}
+                enabled=${engineOn}
+                onToggle=${() => setEngineSwitch('books', !engineSwitches().books)}
+                multipv=${multipv}
+                onMultipv=${n => {
+                  setMultipv(n);
+                  store('books.multipv', n);
+                }}
+              />
+            </div>
+            <div class="panel-body">
+              ${view
+                ? html`<${MoveList} tree=${view.tree} current=${view.node} onSelect=${select} />`
+                : html`<div class="empty"><p class="muted">The moves of the book appear here as the reading gets to them.</p></div>`}
+            </div>
+          </div>`}
     </div>
   </div>`;
 }

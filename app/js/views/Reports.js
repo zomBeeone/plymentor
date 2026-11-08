@@ -10,12 +10,14 @@ import { useCoachHandle, defaultLinkHandler } from '../components/coachHandle.js
 import { CoachPanel } from '../components/CoachPanel.js';
 import { Markdown } from '../components/Markdown.js';
 import { useCoachScreen } from '../coachTerm.js';
+import { Splitter, useSplit, clamp, px } from '../components/Split.js';
 import { sanToUci } from '../chess.js';
 
 export function Reports({ route }) {
   const s = useStore();
   const [list, setList] = useState(null);
   const [creating, setCreating] = useState(false);
+  const split = useSplit('reports');
 
   const loadList = () =>
     get('/api/reports')
@@ -51,7 +53,13 @@ export function Reports({ route }) {
     setCreating(false);
   };
 
-  return html`<div class="reports">
+  return html`<div class="reports" ref=${split.root}>
+    <${Splitter}
+      title="Drag to resize the list and the report"
+      style="right:auto;left:calc(min(var(--list-w, 280px), 45vw) - 4px)"
+      begin=${() => ({ list: split.root.current.querySelector('.list').offsetWidth, total: split.root.current.offsetWidth })}
+      onDrag=${(dx, s) => split.set({ '--list-w': px(clamp(s.list + dx, 200, Math.max(200, s.total - 480))) })}
+    />
     <div class="list">
       <button class="btn primary" style="width:100%;justify-content:center;margin-bottom:12px" disabled=${creating} onClick=${createAll}>
         ${creating ? html`<span class="spinner"></span>` : '+'} Report from all my analysed games

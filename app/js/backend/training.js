@@ -394,6 +394,37 @@ export function repertoireStats(color) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// How far a repertoire's lines are learned (Openings → Learn; which lines there are: js/learn.js)
+
+const DRILLS_TO_LEARN = 2;
+
+/** { line (its moves, uci): { shown, drilled, learned } } of a repertoire. */
+export function repertoireProgress(color) {
+  const out = {};
+  for (const r of all('SELECT line, shown, drilled, learned_at FROM repertoire_lines WHERE color = ?', color)) out[r.line] = { shown: r.shown, drilled: r.drilled, learned: r.learned_at !== null };
+  return out;
+}
+
+/**
+ * A line gone through in Learn (event 'shown') or drilled right in an in-between ('drilled'): once it has been gone
+ * through and drilled right twice, it is learned. Returns { shown, drilled, learned, justLearned }.
+ */
+export function recordLineProgress(color, line, event) {
+  if (color !== 'white' && color !== 'black') throw badRequest('color must be white or black');
+  if (!/^[a-h][1-8][a-h][1-8][qrbn]?(?: [a-h][1-8][a-h][1-8][qrbn]?)*$/.test(line) || line.length > 4000) throw badRequest('Invalid line');
+  if (event !== 'shown' && event !== 'drilled') throw badRequest('Unknown event');
+  return tx(() => {
+    run('INSERT OR IGNORE INTO repertoire_lines (color, line) VALUES (?, ?)', color, line);
+    const before = get('SELECT learned_at FROM repertoire_lines WHERE color = ? AND line = ?', color, line);
+    if (before.learned_at === null) run(`UPDATE repertoire_lines SET ${event} = ${event} + 1 WHERE color = ? AND line = ?`, color, line);
+    const r = get('SELECT shown, drilled, learned_at FROM repertoire_lines WHERE color = ? AND line = ?', color, line);
+    const justLearned = r.learned_at === null && r.shown >= 1 && r.drilled >= DRILLS_TO_LEARN;
+    if (justLearned) run('UPDATE repertoire_lines SET learned_at = ? WHERE color = ? AND line = ?', now(), color, line);
+    return { shown: r.shown, drilled: r.drilled, learned: justLearned || r.learned_at !== null, justLearned };
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
 // Exercises
 
 export function listExercises({ dueOnly = false } = {}) {

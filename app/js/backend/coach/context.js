@@ -62,7 +62,7 @@ export function buildBoardContext(ctx = {}) {
       `Training game vs Stockfish (${ctx.play.level || 'engine'}); the student plays ${ctx.play.color}.${ctx.play.byCoach ? ` You started it (start_training_game)${ctx.play.goal ? ` with the goal: ${String(ctx.play.goal).slice(0, 200)}` : ''}.` : ''}`,
     );
   if (ctx.exercise?.prompt) L.push(`Exercise: ${ctx.exercise.prompt}`);
-  if (ctx.drill) L.push(`Repertoire drill (${ctx.drill.color}${ctx.drill.group ? `, the group "${String(ctx.drill.group).slice(0, 60)}"` : ', all its lines'}).`);
+  if (ctx.drill) L.push(`${ctx.drill.learn ? 'Learning repertoire lines' : 'Repertoire drill'} (${ctx.drill.color}${ctx.drill.group ? `, the group "${String(ctx.drill.group).slice(0, 60)}"` : ', all its lines'}).`);
   if (sans.length) {
     const shown = sans.length > 120 ? `… (${sans.length - 120} earlier plies omitted) ` : '';
     let p = start.clone();

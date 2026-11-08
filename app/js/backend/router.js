@@ -20,6 +20,8 @@ import {
   removeFromRepertoire,
   importRepertoirePgn,
   reviewRepertoireMove,
+  repertoireProgress,
+  recordLineProgress,
   repertoireStats,
   repertoireGroups,
   findRepertoireGroup,
@@ -244,7 +246,12 @@ route('POST', '/api/backup/restore', async ({ body }) => {
 route('GET', '/api/repertoire', ({ query }) => {
   const color = query.color === 'black' ? 'black' : 'white';
   const entries = repertoire(color);
-  return { color, entries, stats: repertoireStats(color), groups: repertoireGroups(color, entries) };
+  return { color, entries, stats: repertoireStats(color), groups: repertoireGroups(color, entries), progress: repertoireProgress(color) };
+});
+/** A line gone through in Learn, or drilled right in between: body { color, line (its moves, uci), event: 'shown' | 'drilled' }. */
+route('POST', '/api/repertoire/lines', ({ body }) => {
+  const { color, line, event } = obj(body);
+  return recordLineProgress(color, String(line || ''), event);
 });
 route('POST', '/api/repertoire/add', ({ body }) => {
   const { color, moves, fen, uci, comment, group } = obj(body);

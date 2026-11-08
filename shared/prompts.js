@@ -147,5 +147,7 @@ export const CLI_TASKS = {
     correct
       ? `[App] I solved the exercise on my board with ${short(played, 20)}. Briefly confirm why it works and what pattern I should remember.`
       : `[App] In the exercise on my board I played ${short(played, 20)}, but the solution was ${short(solution, 120)}. Explain why my move doesn't work and why the solution does, and name the pattern to remember.`,
+  bookPage: ({ noun, number } = {}) =>
+    `[App] Explain ${noun === 'chapter' ? 'chapter' : 'page'} ${Number(number) || 1} of the book I am reading (read_book): the main ideas in your own words, what to look at on the board, and the one thing to remember. Keep it short: your panel is small here.`,
   repertoireWhy: ({ san } = {}) => `[App] In my repertoire I play ${short(san, 12)} in the position on my board. Explain the idea behind this move and what to remember about the position.`,
 };

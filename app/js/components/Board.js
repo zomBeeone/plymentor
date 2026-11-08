@@ -1,9 +1,10 @@
 // Chessground (lichess board) wrapped as a Preact component, with a promotion picker.
-import { html, useEffect, useRef, useState } from '../../vendor/preact.js';
+import { html, useEffect, useLayoutEffect, useRef, useState } from '../../vendor/preact.js';
 import { Chessground } from '../../vendor/chessground.js';
 import { tryPos, dests as destsOf, isPromotion, turnOf } from '../chess.js';
 import { pieceUrl } from '../board-theme.js';
 import { state } from '../store.js';
+import { holding } from '../hold.js';
 
 const GLYPH_COLORS = { great: '#0ca30c', inaccuracy: '#fab219', mistake: '#ec835a', blunder: '#d03b3b' };
 const GLYPHS = { great: '!!', inaccuracy: '?!', mistake: '?', blunder: '??' };
@@ -45,7 +46,7 @@ function cgConfig(p) {
     movable: { free: false, color: canMove ? turn : undefined, dests: canMove ? destsOf(pos) : new Map(), showDests: true },
     drawable: { enabled: !p.viewOnly, visible: true, autoShapes: (p.shapes || []).filter(Boolean) },
     highlight: { lastMove: true, check: true, custom: new Map(Object.entries(p.highlights || {})) },
-    animation: { enabled: p.animation !== false, duration: 180 },
+    animation: { enabled: p.animation !== false && !holding(), duration: 180 },
     premovable: { enabled: false },
     draggable: { enabled: !p.viewOnly, showGhost: true },
     selectable: { enabled: !p.viewOnly },
@@ -117,13 +118,16 @@ export function Board(props) {
     };
   }, []);
 
-  useEffect(() => {
+  // (before the screen is painted: the board in step with what changes around it)
+  useLayoutEffect(() => {
     if (!cg.current) return;
     if (lastFen.current !== props.fen) {
       cg.current.setShapes([]);
       lastFen.current = props.fen;
     }
     cg.current.set(cgConfig(props));
+    // (going through moves: each drawn in its own frame, none left for a redraw that the next one would replace)
+    if (holding()) cg.current.state.dom.redrawNow();
     if (lastOrientation.current !== props.orientation) {
       lastOrientation.current = props.orientation;
       resyncSoon(); // a new orientation rebuilds the board (see resyncSoon)
