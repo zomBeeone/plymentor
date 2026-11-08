@@ -1,6 +1,8 @@
-// The coaches: Claude Code, OpenAI Codex (ChatGPT) and Google's Antigravity CLI (Gemini). Finds or installs them,
-// prepares the session workspace (standing instructions + the plymentor MCP server) and builds the launch command.
-// They run with the student's own login (subscription), exactly as when started in a terminal.
+// The coaches: Claude Code, OpenAI Codex (ChatGPT) and Google's Antigravity CLI (Gemini), and "another model" —
+// Claude Code pointed at a model server the student chooses (a model on their computer with Ollama, or a provider
+// with an Anthropic-compatible address). Finds or installs them, prepares the session workspace (standing
+// instructions + the plymentor MCP server) and builds the launch command. They run with the student's own login
+// (subscription), exactly as when started in a terminal — "another model" with the server's address and key instead.
 //
 // Each one is installed with its vendor's own installer (a PowerShell script on Windows that downloads the program and
 // checks its checksum), so the app needs no Node.js or npm. A copy that is a JavaScript file (an older npm install)
@@ -56,6 +58,19 @@ export const PROVIDERS = {
     installer: { win: 'irm https://antigravity.google/cli/install.ps1 | iex', unix: 'curl -fsSL https://antigravity.google/cli/install.sh | bash' },
     update: ['update'],
   },
+  // Claude Code itself (`via`), in a workspace of its own, talking to the model server in the settings (`server`)
+  other: {
+    label: 'Claude Code',
+    name: 'your coach',
+    product: 'your model',
+    via: 'claude-code',
+    npm: '@anthropic-ai/claude-code',
+    bin: 'claude',
+    env: 'PLYMENTOR_CLAUDE_PATH',
+    account: 'the model server you chose',
+    workspace: 'other-model',
+    installer: { win: 'irm https://claude.ai/install.ps1 | iex', unix: 'curl -fsSL https://claude.ai/install.sh | bash' },
+  },
 };
 
 export const isProvider = id => Object.hasOwn(PROVIDERS, id);
@@ -106,6 +121,7 @@ function newestFirst(a, b) {
 
 /** Where the vendors' installers (and editor extensions) put the programs. */
 function knownLocations(id) {
+  id = PROVIDERS[id]?.via || id;
   const home = homedir();
   const local = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local');
   const out = [];
@@ -325,6 +341,8 @@ export function cliEnv(provider) {
   for (const k of Object.keys(env))
     if (k === 'CLAUDECODE' || k.startsWith('CLAUDE_CODE_') || k.startsWith('PLYMENTOR_') || k.startsWith('CHESS_COACH_') || k === 'ELECTRON_RUN_AS_NODE' || k === 'ELECTRON_NO_ATTACH_CONSOLE') delete env[k];
   if (provider === 'claude-code') delete env.ANTHROPIC_API_KEY; // use the subscription login, never bill the API key
+  // another model: only the server in the settings (launchCommand), never one or a key of the user's environment
+  if (PROVIDERS[provider]?.via === 'claude-code') for (const k of Object.keys(env)) if (k.startsWith('ANTHROPIC_')) delete env[k];
   delete env.NO_COLOR;
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
@@ -350,13 +368,14 @@ function readJsonFile(file) {
  * Writes the workspace of a profile's session and returns the launch command. The first message is not passed on
  * the command line: the CLIs connect MCP servers in the background and would answer it before the chess tools are
  * there, so the terminal types it once the coach has listed the tools.
- * opts: { userId, port, token, instructions, model, mcpScript }
+ * opts: { userId, port, token, instructions, model, mcpScript, server } — server: another model's { url, key }
  */
-export function launchCommand(id, { userId, port, token, instructions, model, mcpScript }) {
+export function launchCommand(id, { userId, port, token, instructions, model, mcpScript, server }) {
   const p = PROVIDERS[id];
   const cli = findCli(id);
   if (!cli) return null;
   if (!isAccountId(userId)) throw new Error('Invalid profile id');
+  if (p.via && (!server?.url || !model)) throw new Error('set the address of your model server and the model’s name in Settings (Your coach) first.');
   const base = join(WORKSPACES, userId);
   const dir = join(base, p.workspace || id);
   mkdirSync(dir, { recursive: true });
@@ -364,7 +383,7 @@ export function launchCommand(id, { userId, port, token, instructions, model, mc
   const mcp = { command: process.execPath, args: [mcpScript], env: { PLYMENTOR_URL: `http://127.0.0.1:${port}`, PLYMENTOR_TOKEN: token, ...NODE_ENV } };
   let args;
   let env = cliEnv(id);
-  if (id === 'claude-code') {
+  if (id === 'claude-code' || p.via === 'claude-code') {
     writeFileSync(join(dir, 'coach-instructions.md'), instructions);
     writeFileSync(join(dir, 'mcp.json'), JSON.stringify({ mcpServers: { [MCP_NAME]: { type: 'stdio', ...mcp } } }, null, 2));
     args = [
@@ -381,6 +400,19 @@ export function launchCommand(id, { userId, port, token, instructions, model, mc
       '--name',
       'Plymentor',
     ];
+    if (p.via) {
+      // Another model: Claude Code sends its requests to the student's server with the key (any word for a server on
+      // this computer); the model answers whatever Claude Code would ask a Claude model, and it talks to no one else.
+      env = {
+        ...env,
+        ANTHROPIC_BASE_URL: server.url,
+        ANTHROPIC_AUTH_TOKEN: server.key || 'plymentor',
+        ANTHROPIC_DEFAULT_OPUS_MODEL: model,
+        ANTHROPIC_DEFAULT_SONNET_MODEL: model,
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      };
+    }
   } else if (id === 'codex') {
     writeFileSync(join(dir, 'AGENTS.md'), instructions);
     const key = `mcp_servers.${MCP_NAME.replace('-', '_')}`;

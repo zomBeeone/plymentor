@@ -136,6 +136,20 @@ async function handle(text) {
     say(`explain: ${b.text.split('\n').find(l => l.startsWith('Current position')) || b.text.split('\n')[0]}`);
     return;
   }
+  if (/play the opposition with me/i.test(text)) {
+    // a lesson position the student plays out with the coach: White to move, their answer comes as a move
+    const set = await call('set_board', { fen: '8/8/4k3/8/8/4K3/4P3/8 w - - 0 1', caption: 'The opposition', ask_move: true });
+    say(`lesson shown: ${set.isError ? `ERROR ${set.text.slice(0, 60)}` : 'ok'}`);
+    return;
+  }
+  if (/^I play 1\. Ke4/.test(text)) {
+    // the reply written as a FEN with the wrong side to move (refused), then played on the board with make_move
+    const slip = await call('set_board', { fen: '8/8/3k4/8/4K3/8/4P3/8 b - - 2 2' });
+    say(`slip refused: ${slip.isError && /White to move there/.test(slip.text) ? 'yes' : 'no'}`);
+    const made = await call('make_move', { moves: ['Kd6'], ask_move: true });
+    say(`make_move: ${made.isError ? `ERROR ${made.text.slice(0, 60)}` : 'ok'}`);
+    return;
+  }
   if (/give me an endgame/i.test(text)) {
     // makes the student play a rook endgame out against Stockfish (from whatever screen they are on), then looks
     const r = await call('start_training_game', { fen: '8/8/8/4k3/8/8/8/R3K3 w - - 0 1', level: 1, comments: 'off', goal: 'Mate with the rook' });

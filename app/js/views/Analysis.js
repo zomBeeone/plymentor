@@ -527,7 +527,7 @@ export function Analysis({ route }) {
     }
     // a position a move or two after the one on the board becomes a variation there; another one gets a board of its
     // own (with the moves that lead to it, when they are known)
-    const { tree, node: target } = placeCoachPosition(ctrl.tree, ev);
+    const { tree, node: target } = placeCoachPosition(ctrl.tree, ev, { current: ctrl.node });
     if (tree !== ctrl.tree) {
       if (ui.gameId) pushStash('the game');
       ui.game = null;

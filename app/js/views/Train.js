@@ -341,10 +341,11 @@ function Lessons({ route }) {
     const pos = tryPos(ev.fen);
     if (!pos) return;
     const fen = fenOf(pos);
-    const { tree, node: target } = placeCoachPosition(lctrl.tree, ev);
+    const { tree, node: target } = placeCoachPosition(lctrl.tree, ev, { current: lctrl.node });
     if (tree !== lctrl.tree) lctrl.setTree(tree);
     if (ev.line?.length) tree.addLine(target, ev.line.map(m => m.uci));
-    lctrl.orientation = ev.orientation || pos.turn;
+    // (a new position faces the side to move; the coach's reply on the student's position leaves the board as it is)
+    if (ev.orientation || !ev.played) lctrl.orientation = ev.orientation || pos.turn;
     lesson.shapes = ev.shapes?.length ? { fen, shapes: ev.shapes } : null;
     lesson.caption = ev.caption ? { fen, text: ev.caption } : null;
     lesson.question = ev.askMove ? { fen } : null;

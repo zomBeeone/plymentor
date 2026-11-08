@@ -2,7 +2,7 @@
 // first move, the arrows and circles drawn in comments, the NAGs — and written back as PGN.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Tree, commentsOf } from '../../app/js/tree.js';
+import { Tree, commentsOf, placeCoachPosition } from '../../app/js/tree.js';
 
 const PGN = `[Event "?"]
 
@@ -39,4 +39,21 @@ test('a PGN’s comments stay on their moves — before the first move, after a 
   assert.deepEqual(marks(again), marks(tree));
   assert.match(tree.toPgn(), /\n\n\{Before it all\} 1\. e4 \{Best by test\} \{\[%csl Yd5\] \[%cal Ge2e4,Rd7d5\]\} 1\.\.\. e5 /);
   assert.match(tree.toPgn(), /\(\{Or\} 1\.\.\. e6\)/);
+});
+
+test('the coach’s move on the student’s position goes on from it, in the same tree', () => {
+  const START = '8/8/4k3/8/8/4K3/4P3/8 b - - 0 1';
+  const tree = Tree.fromMoves(START, ['e6d6']);
+  const student = tree.mainline()[1];
+  const fen = Tree.fromMoves(START, ['e6d6', 'e3d4']).mainline()[2].fen;
+  const ev = { action: 'set_board', fen, played: { from: student.fen, ucis: ['e3d4'] }, path: null };
+  // from the node the student is at
+  const r = placeCoachPosition(tree, ev, { current: student });
+  assert.equal(r.tree, tree);
+  assert.deepEqual([r.node.parent, r.node.san], [student, 'Kd4']);
+  // the student went back: the position is found in the tree all the same
+  assert.equal(placeCoachPosition(tree, ev, { current: tree.root }).node, r.node);
+  // a board that does not hold the position: the move from it, on its own
+  const other = placeCoachPosition(new Tree(), ev);
+  assert.deepEqual([other.tree.startFen, other.node.san, other.node.fen], [student.fen, 'Kd4', fen]);
 });

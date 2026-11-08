@@ -51,17 +51,21 @@ const connected = s => !!s.host && !['offline', 'outdated', 'connecting'].includ
 // ---------------------------------------------------------------------------------------------
 // The coach (its settings are kept by the coach host, on this computer)
 
-const PROVIDER_ORDER = ['claude-code', 'codex', 'gemini'];
+const PROVIDER_ORDER = ['claude-code', 'codex', 'gemini', 'other'];
+// (program: the program Plymentor installs for it, when that is not its name)
 const PROVIDER_TEXT = {
   'claude-code': { name: 'Claude Code', how: 'with your Claude Pro or Max subscription', model: 'e.g. opus, sonnet', maker: 'Anthropic' },
   codex: { name: 'ChatGPT', how: 'OpenAI Codex CLI with your ChatGPT Plus or Pro subscription', model: 'e.g. gpt-5.5', maker: 'OpenAI' },
   gemini: { name: 'Gemini', how: "Google's Antigravity CLI with your Google account", model: 'e.g. Gemini 3.5 Flash', maker: 'Google' },
+  other: { name: 'Another model', how: 'a model on your computer (Ollama) or another provider’s, through Claude Code — no subscription needed', model: 'e.g. qwen3.5', maker: 'Anthropic', program: 'Claude Code' },
 };
 const SIGN_IN = {
   'claude-code': 'Sign-in: if Claude Code is not signed in yet, it shows the sign-in steps in the coach panel the first time.',
   codex: 'Sign-in: the first time, Codex asks you to sign in with your ChatGPT account in the coach panel (it opens your web browser).',
   gemini:
     'Sign-in: the first time, the Antigravity CLI asks a few set-up questions in the coach panel (colours, layout, trusting the coach’s folder) and how to sign in — choose Google OAuth; your web browser opens to sign in with Google.',
+  other:
+    'No sign-in: Claude Code talks to your model server below — Ollama on this computer (http://localhost:11434), or any server with an Anthropic-compatible address, as many providers have for Claude Code. The model must be able to use tools, and a larger one coaches better (with Ollama, give it a context of 64k or more).',
 };
 
 async function saveCoach(patch) {
@@ -99,14 +103,14 @@ function CoachSettings({ st }) {
   }, [hs.initialPrompt]);
 
   const choose = async id => {
-    if (await saveCoach({ provider: id })) toast(`Your coach is now ${PROVIDER_TEXT[id].name}. The session starts in the coach panel.`, 'success');
+    if (await saveCoach({ provider: id })) toast(`Your coach is now ${id === 'other' ? 'another model' : PROVIDER_TEXT[id].name}. The session starts in the coach panel.`, 'success');
   };
   const install = async id => {
     setBusy(true);
     setLog('');
     try {
       await installCoachCli(id, text => setLog(l => ((l || '') + text).slice(-6000)));
-      toast(`${PROVIDER_TEXT[id].name} is installed.`, 'success');
+      toast(`${PROVIDER_TEXT[id].program || PROVIDER_TEXT[id].name} is installed.`, 'success');
       setLog(null);
       await refresh(true);
     } catch (e) {
@@ -118,7 +122,7 @@ function CoachSettings({ st }) {
   const cli = clis?.find(c => c.id === provider);
   return html`<div class="card">
     <h2>Your coach</h2>
-    <p class="muted" style="margin-top:0">Your coach runs on your computer with your own subscription — no API key needed. It sees your board, runs Stockfish through the app, and keeps notes about you between sessions. Its settings and notes stay on this computer.</p>
+    <p class="muted" style="margin-top:0">Your coach runs on your computer with your own subscription — no API key needed — or with a model of your choice. It sees your board, runs Stockfish through the app, and keeps notes about you between sessions. Its settings and notes stay on this computer.</p>
     ${!online
       ? html`<div class="row"><span class="spinner"></span> <span class="muted">${s.coachStatus?.message || 'Connecting to the coach…'}</span></div>`
       : html`<div class="provider-list">
@@ -143,7 +147,7 @@ function CoachSettings({ st }) {
           <div class="col" style="margin-top:12px">
             <div class="row wrap">
               ${cli && !cli.installed
-                ? html`<button class="btn primary" disabled=${busy} onClick=${() => install(provider)}>${busy ? html`<span class="spinner"></span> Installing…` : `Install ${PROVIDER_TEXT[provider].name}`}</button>`
+                ? html`<button class="btn primary" disabled=${busy} onClick=${() => install(provider)}>${busy ? html`<span class="spinner"></span> Installing…` : `Install ${PROVIDER_TEXT[provider].program || PROVIDER_TEXT[provider].name}`}</button>`
                 : html`<button class="btn" disabled=${busy || !cli} onClick=${() => install(provider)} title="Install the latest version with the official installer">${busy ? html`<span class="spinner"></span> Updating…` : 'Update'}</button>`}
               <button class="btn" onClick=${() => confirm('Start a new coaching session? The coach keeps its notes about you.') && restartCoach()}>Restart the coach session</button>
               <button class="btn ghost" onClick=${() => refresh(true)}>Check again</button>
@@ -152,7 +156,16 @@ function CoachSettings({ st }) {
             ${cli?.path && html`<small class="muted">Program: ${cli.path}</small>`}
             <small class="muted">${SIGN_IN[provider]}</small>
             <div class="settings-grid">
-              <${TextField} label="Model (optional)" value=${hs.models?.[provider]} onSave=${v => saveCoach({ models: { [provider]: v.trim() } })} placeholder=${PROVIDER_TEXT[provider].model} hint="Empty = the program's default. Applies when the session restarts." />
+              ${provider === 'other' &&
+              html`<${TextField} label="Model server" value=${hs.server?.url} onSave=${v => saveCoach({ server: { url: v.trim() } })} placeholder="http://localhost:11434" hint="Its Anthropic-compatible address. Applies when the session restarts." />
+                <${TextField} label="Key (if the server needs one)" type="password" value=${hs.server?.key} onSave=${v => saveCoach({ server: { key: v.trim() } })} hint="Kept in Plymentor's settings on this computer and given only to the coach program." />`}
+              <${TextField}
+                label=${provider === 'other' ? 'Model' : 'Model (optional)'}
+                value=${hs.models?.[provider]}
+                onSave=${v => saveCoach({ models: { [provider]: v.trim() } })}
+                placeholder=${PROVIDER_TEXT[provider].model}
+                hint=${provider === 'other' ? 'Its name on the server (with Ollama, as “ollama list” shows it). Applies when the session restarts.' : "Empty = the program's default. Applies when the session restarts."}
+              />
             </div>
           </div>
           <label class="field" style="margin-top:12px"><span>Start-up prompt — sent to the coach each time you open the app</span>
@@ -464,7 +477,7 @@ export function Settings() {
       <img src="/assets/brand/studio-nox.png" alt="Studio Nox" />
       <p class="muted">Plymentor ${APP_VERSION}${s.desktop?.portable ? ' (portable)' : ''} · <a href="/about" target="_blank">About</a> · <a href="/licenses" target="_blank">Licences</a>${SOURCE_URL && html` · <a href=${SOURCE_URL} onClick=${external(SOURCE_URL)}>Source code</a>`}</p>
       <p class="muted">Board, pieces, chess logic and opening names come from lichess (AGPL/GPL/CC0).</p>
-      <p class="muted disclaimer"><b>Disclaimer:</b> connecting an AI coach (Claude Code, ChatGPT or Gemini) and using it uses your own account with that provider — its tokens, credits or usage limits — and may cost you money. Studio Nox takes no responsibility for any costs, charges or other monetary matters arising from connecting or using a coach.</p>
+      <p class="muted disclaimer"><b>Disclaimer:</b> connecting an AI coach (Claude Code, ChatGPT, Gemini or another model) and using it uses your own account with that provider — its tokens, credits or usage limits — and may cost you money. Studio Nox takes no responsibility for any costs, charges or other monetary matters arising from connecting or using a coach.</p>
     </div>
   </div></div>`;
 }

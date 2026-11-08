@@ -232,12 +232,21 @@ export class Tree {
 
 /**
  * Where a position the coach shows (set_board) goes: { tree, node }, `tree` being the given one when the position fits
- * in it. ev.path: the moves from the initial position that lead to it, when known (ev.pathFrom: 'moves' — the coach's
- * own, 'board' — after the line on the student's board, 'book' — from the opening book). merge: the coach's lines join
- * a tree that starts from the initial position (the Openings board); otherwise only a position a move or two after the
- * student's line does, and the others get a tree of their own — with the moves that lead to them, when known.
+ * in it. ev.played: moves the coach played from a position of the student's line (make_move, or a FEN a move or two
+ * after it) — they go on from there: from `current`, the node the student is at, when it is that position. ev.path:
+ * the moves from the initial position that lead to it, when known (ev.pathFrom: 'moves' — the coach's own, 'board' —
+ * after the line on the student's board, 'book' — from the opening book). merge: the coach's lines join a tree that
+ * starts from the initial position (the Openings board); otherwise only a position a move or two after the student's
+ * line does, and the others get a tree of their own — with the moves that lead to them, when known.
  */
-export function placeCoachPosition(tree, ev, { merge = false } = {}) {
+export function placeCoachPosition(tree, ev, { merge = false, current = null } = {}) {
+  const played = ev.played && Array.isArray(ev.played.ucis) ? ev.played : null;
+  if (played) {
+    const from = current && repKey(current.fen) === repKey(played.from) ? current : tree.findByFen(played.from);
+    const t = from ? tree : new Tree(played.from); // (a board that does not hold that position: the moves on their own)
+    const node = t.addLine(from || t.root, played.ucis);
+    if (repKey(node.fen) === repKey(ev.fen)) return { tree: t, node };
+  }
   const path = Array.isArray(ev.path) ? ev.path.map(m => m.uci) : null;
   const known = tree.findByFen(ev.fen);
   if (known && !(merge && path && ev.pathFrom === 'moves')) return { tree, node: known };

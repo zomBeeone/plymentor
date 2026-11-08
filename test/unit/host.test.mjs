@@ -148,7 +148,7 @@ test('a page connects: welcome, the coach starts with the fake program, tools li
   assert.equal(welcome.settings.provider, 'claude-code');
   assert.equal(welcome.home, home);
   await waitMsg(ws, m => m.t === 'status' && m.state === 'running');
-  await waitTerm(ws, /tools: 31/);
+  await waitTerm(ws, /tools: 32/);
   const mcpJson = JSON.parse(readFileSync(join(home, 'coach-workspace', USER, 'claude-code', 'mcp.json'), 'utf8'));
   const server = mcpJson.mcpServers.plymentor;
   token = server.env.PLYMENTOR_TOKEN;
@@ -173,7 +173,7 @@ test('the coach’s tool calls go to the page; the notes stay with the host', as
   // the bridge itself, with the secret
   const auth = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
   const list = JSON.parse((await http('/agent/tools', { headers: auth })).body);
-  assert.equal(list.tools.length, 31);
+  assert.equal(list.tools.length, 32);
   const bad = JSON.parse((await http('/agent/tools/analyze_position', { method: 'POST', headers: auth, body: JSON.stringify({ arguments: { fen: 1 } }) })).body);
   assert.equal(bad.isError, true, 'invalid input never reaches the page');
   const unknown = JSON.parse((await http('/agent/tools/rm_rf', { method: 'POST', headers: auth, body: '{}' })).body);
@@ -290,6 +290,17 @@ test('store: settings and notes per profile, ids checked', () => {
   assert.equal(store.normalizeSettings({ provider: 'gemini', models: { gemini: 'Gemini 3.5 Flash' } }).models.gemini, '', 'spaces are not allowed in model names');
 });
 
+test('another model: the address of its server and its key are kept in the settings, checked', () => {
+  const id = '33333333-2222-4333-8444-555555555555';
+  const s = store.updateSettings(id, { provider: 'other', models: { other: 'qwen3.5:27b' }, server: { url: ' http://localhost:11434 ', key: 'sk-or-v1-abc' } });
+  assert.deepEqual([s.provider, s.models.other, s.server], ['other', 'qwen3.5:27b', { url: 'http://localhost:11434', key: 'sk-or-v1-abc' }]);
+  assert.throws(() => store.updateSettings(id, { server: { url: 'file:///C:/Windows' } }), /starts with http/);
+  assert.throws(() => store.updateSettings(id, { server: { url: 'http://local host' } }), /starts with http/);
+  assert.throws(() => store.updateSettings(id, { server: { key: 'two words' } }), /without spaces/);
+  assert.deepEqual(store.readSettings(id).server, { url: 'http://localhost:11434', key: 'sk-or-v1-abc' }, 'a refused change is not saved');
+  assert.equal(store.updateSettings(id, { server: { url: '' } }).server.url, '', 'emptied');
+});
+
 test('the coach programs are found where the official installers put them', () => {
   const KEYS = ['PATH', 'LOCALAPPDATA', 'APPDATA', 'USERPROFILE', 'ProgramFiles', 'PLYMENTOR_CLAUDE_PATH'];
   const saved = Object.fromEntries(KEYS.map(k => [k, process.env[k]]));
@@ -301,7 +312,7 @@ test('the coach programs are found where the official installers put them', () =
     process.env.USERPROFILE = join(fake, 'home');
     process.env.ProgramFiles = join(fake, 'programs');
     delete process.env.PLYMENTOR_CLAUDE_PATH;
-    for (const id of ['claude-code', 'codex', 'gemini']) assert.equal(cli.findCli(id), null, `${id}: nothing installed`);
+    for (const id of ['claude-code', 'codex', 'gemini', 'other']) assert.equal(cli.findCli(id), null, `${id}: nothing installed`);
     const place = (...parts) => {
       mkdirSync(join(...parts.slice(0, -1)), { recursive: true });
       writeFileSync(join(...parts), '');
@@ -322,6 +333,7 @@ test('the coach programs are found where the official installers put them', () =
     const codex = place(fake, 'local', 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe');
     const agy = place(fake, 'local', 'agy', 'bin', 'agy.exe');
     assert.deepEqual(cli.findCli('claude-code'), { kind: 'exe', file: claude, source: 'known' });
+    assert.deepEqual(cli.findCli('other'), { kind: 'exe', file: claude, source: 'known' }, 'another model runs the same Claude Code');
     assert.deepEqual(cli.findCli('codex'), { kind: 'exe', file: codex, source: 'known' });
     assert.deepEqual(cli.findCli('gemini'), { kind: 'exe', file: agy, source: 'known' });
     // an npm copy that Chess Coach 1.x installed (in its old folder) is the last choice, and runs on Node.js
@@ -347,6 +359,33 @@ test('the installers are the vendors’ official ones', () => {
   assert.equal(cli.PROVIDERS.codex.installer.win, 'irm https://chatgpt.com/codex/install.ps1 | iex');
   assert.equal(cli.PROVIDERS.codex.installerEnv.CODEX_NON_INTERACTIVE, '1');
   assert.equal(cli.PROVIDERS.gemini.installer.win, 'irm https://antigravity.google/cli/install.ps1 | iex');
+  assert.equal(cli.PROVIDERS.other.installer.win, 'irm https://claude.ai/install.ps1 | iex');
+});
+
+test('another model: Claude Code in a folder of its own, sent to the student’s server with its key and model only', () => {
+  const user = '22222222-2222-4333-8444-555555555555';
+  const opts = { userId: user, port: 4321, token: 'a'.repeat(48), instructions: '# test', mcpScript: MCP_SCRIPT };
+  const local = { url: 'http://localhost:11434', key: '' };
+  process.env.ANTHROPIC_BASE_URL = 'https://elsewhere.example';
+  process.env.ANTHROPIC_API_KEY = 'sk-test';
+  try {
+    assert.throws(() => cli.launchCommand('other', { ...opts, model: 'qwen3.5' }), /model server/);
+    assert.throws(() => cli.launchCommand('other', { ...opts, model: '', server: local }), /model server/);
+    const r = cli.launchCommand('other', { ...opts, model: 'qwen3.5', server: local });
+    const at = flag => r.args[r.args.indexOf(flag) + 1];
+    assert.deepEqual([at('--model'), at('--allowedTools'), at('--tools')], ['qwen3.5', 'mcp__plymentor', '']);
+    assert.match(r.cwd, /other-model$/);
+    assert.deepEqual(
+      [r.env.ANTHROPIC_BASE_URL, r.env.ANTHROPIC_AUTH_TOKEN, r.env.ANTHROPIC_API_KEY, r.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, r.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC],
+      ['http://localhost:11434', 'plymentor', undefined, 'qwen3.5', '1'],
+    );
+    assert.equal(cli.launchCommand('other', { ...opts, model: 'kimi-k2', server: { url: 'https://api.example.com/anthropic', key: 'sk-abc' } }).env.ANTHROPIC_AUTH_TOKEN, 'sk-abc');
+    // the subscription's Claude Code keeps the student's own environment, as before
+    assert.equal(cli.launchCommand('claude-code', { ...opts, model: '' }).env.ANTHROPIC_BASE_URL, 'https://elsewhere.example');
+  } finally {
+    delete process.env.ANTHROPIC_BASE_URL;
+    delete process.env.ANTHROPIC_API_KEY;
+  }
 });
 
 test('each coach starts with the plymentor MCP server and only its tools', () => {

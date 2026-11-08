@@ -4,7 +4,7 @@
 // coach host (shared/tools.js). The notes about the student (get/update_player_memory) are answered by the host itself.
 import { getSettings } from '../settings.js';
 import { run, get, tx, now, json } from '../db.js';
-import { posFromFen, fenOf, keyOf, parseMove, playLine, formatLine, moveLabel, moveFromUci, legalMoves, uciOf, initialPos, outcomeText, ChessError, INITIAL_FEN } from '../chess/core.js';
+import { posFromFen, fenOf, keyOf, parseMove, playLine, formatLine, moveLabel, moveFromUci, legalMoves, uciOf, ucisToSans, squareName, initialPos, outcomeText, ChessError, INITIAL_FEN } from '../chess/core.js';
 import { describePosition } from '../chess/features.js';
 import { evaluate, describeEval, evaluateMove, describeMoveEval, PLAY_LEVELS } from '../engine/pool.js';
 import { lookup, bookMoves, bookPathTo, search as searchOpenings } from '../chess/openings.js';
@@ -55,29 +55,143 @@ function reportText(markdown) {
 }
 
 /**
- * The line on the student's board (the moves from the initial position, as the window reports them) when the position
- * `key` is the one they are looking at or comes one or two moves after it: playLine steps, or null.
+ * The line on the student's board, as the window reports it: the positions from where it starts (the initial
+ * position, one set up, an exercise's) to the one they see, and its moves; `standard` when it starts from the initial
+ * position. Null when their screen shows no board.
  */
-function pathOnBoard(screen, key) {
+function boardLine(screen) {
   const c = screen?.context;
-  if (!c || c.startFen || !Array.isArray(c.ucis) || c.ucis.length > 300) return null;
-  const here = playLine(INITIAL_FEN, c.ucis);
-  if (here.error) return null;
-  if (keyOf(here.pos) === key) return here.steps;
-  const on = ucis => playLine(INITIAL_FEN, [...c.ucis, ...ucis]).steps;
-  for (const m1 of legalMoves(here.pos)) {
-    const p1 = here.pos.clone();
+  if (!c || (!Array.isArray(c.ucis) && !c.fen)) return null;
+  const ucis = Array.isArray(c.ucis) ? c.ucis : [];
+  if (ucis.length > 300) return null;
+  const start = c.startFen || (c.ucis ? INITIAL_FEN : c.fen);
+  let pos;
+  try {
+    pos = posFromFen(start);
+  } catch {
+    return null;
+  }
+  const positions = [pos.clone()];
+  for (const uci of ucis) {
+    const m = moveFromUci(pos, uci);
+    if (!m) return null;
+    pos.play(m);
+    positions.push(pos.clone());
+  }
+  return { positions, ucis, standard: start === INITIAL_FEN || keyOf(positions[0]) === keyOf(initialPos()) };
+}
+
+const PIECE_SETS = ['white', 'pawn', 'knight', 'bishop', 'rook', 'queen', 'king'];
+/** The squares where two positions' boards differ: a piece there or not, its kind or its colour. */
+function squaresApart(a, b) {
+  let d = a.board.occupied.xor(b.board.occupied);
+  for (const k of PIECE_SETS) d = d.union(a.board[k].xor(b.board[k]));
+  return d;
+}
+/** The same pieces on the same squares, the same side to move (castling rights and the clocks aside). */
+const sameBoard = (a, b) => a.turn === b.turn && a.board.occupied.equals(b.board.occupied) && squaresApart(a, b).isEmpty();
+
+/** The moves (UCI, one or two) that lead from `from` to the board of `to`, or null. */
+function movesTo(from, to) {
+  const count = to.board.occupied.size();
+  const one = from.turn !== to.turn;
+  for (const m1 of legalMoves(from)) {
+    const p1 = from.clone();
     const u1 = uciOf(p1, m1);
     p1.play(m1);
-    if (keyOf(p1) === key) return on([u1]);
+    if (one) {
+      if (sameBoard(p1, to)) return [u1];
+      continue;
+    }
+    const extra = p1.board.occupied.size() - count;
+    if (extra < 0 || extra > 1) continue; // (a move takes one piece at most)
     for (const m2 of legalMoves(p1)) {
       const p2 = p1.clone();
       const u2 = uciOf(p2, m2);
       p2.play(m2);
-      if (keyOf(p2) === key) return on([u1, u2]);
+      if (sameBoard(p2, to)) return [u1, u2];
     }
   }
   return null;
+}
+
+/**
+ * Where a position the coach gives (`pos`) stands to the line on the student's board (boardLine): { at } — it is one
+ * of the line's positions (its index); { from, ucis } — a move or two after one of them (the one they see, or a
+ * variation off an earlier one); { near } — none of these, but a few squares off the position they see or one a move
+ * after it: a move written as a FEN, with a slip (a Black knight written as a White one, a piece left behind). Null for
+ * a position of its own.
+ */
+function fitOnBoard(line, pos) {
+  const { positions } = line;
+  const last = positions.length - 1;
+  for (let i = last; i >= 0; i--) if (sameBoard(positions[i], pos)) return { at: i };
+  const here = movesTo(positions[last], pos);
+  if (here) return { from: last, ucis: here };
+  let closest = last;
+  let fewest = squaresApart(positions[last], pos).size();
+  for (let i = last - 1; i >= 0; i--) {
+    const n = squaresApart(positions[i], pos).size();
+    if (n < fewest) (closest = i), (fewest = n);
+  }
+  if (closest !== last) {
+    const before = movesTo(positions[closest], pos);
+    if (before) return { from: closest, ucis: before };
+  }
+  // a position a move after the one they see, or that one, a few squares off (a move first, as the likelier meaning;
+  // between alike ones, the one whose pieces the FEN has, if in the wrong colour)
+  let near = null;
+  const consider = (p, move) => {
+    const squares = squaresApart(p, pos);
+    const off = squares.size() + (p.turn === pos.turn ? 0 : 1);
+    if (off > NEAR_SQUARES || (near && off > near.off)) return;
+    let unlike = 0;
+    for (const sq of squares) if (p.board.getRole(sq) !== pos.board.getRole(sq)) unlike++;
+    if (!near || off < near.off || unlike < near.unlike) near = { pos: p, move, squares, off, unlike };
+  };
+  for (const m of legalMoves(positions[last])) {
+    const p = positions[last].clone();
+    p.play(m);
+    consider(p, m);
+  }
+  consider(positions[last], null);
+  return near ? { near } : null;
+}
+const NEAR_SQUARES = 3;
+
+/** The coach's error for a FEN a few squares off the student's board (fitOnBoard's `near`). */
+function nearMessage(line, near, pos) {
+  const here = line.positions.at(-1);
+  const san = near.move ? ucisToSans(here, [uciOf(here, near.move)])[0] : null;
+  const what = sq => {
+    const p = near.pos.board.get(sq);
+    const q = pos.board.get(sq);
+    const piece = x => (x ? `${x.color === 'white' ? 'a White' : 'a Black'} ${x.role} (${pieceLetter(x)})` : 'nothing');
+    return `${squareName(sq)} has ${piece(q)} where it should have ${piece(p)}`;
+  };
+  const diffs = [...near.squares].slice(0, 4).map(what);
+  if (near.pos.turn !== pos.turn) diffs.push(`it is ${sideName(near.pos.turn)} to move there, not ${sideName(pos.turn)}`);
+  const colours = [...near.squares].some(sq => near.pos.board.get(sq)?.role && near.pos.board.get(sq)?.role === pos.board.get(sq)?.role);
+  return [
+    `That FEN is not the position on the student's board (${fenOf(here)}) or a legal move or two after it.`,
+    san ? `It is closest to the position after ${san} (${fenOf(near.pos)}): ${diffs.join('; ')}.` : `It is closest to their position: ${diffs.join('; ')}.`,
+    colours ? "In a FEN, White's pieces are capital letters and Black's small ones." : '',
+    `To play a move on their board, use make_move with the move${san ? ` (moves: ["${san}"])` : ''}: no FEN needed. To show a position of your own that is not a move from theirs, call set_board again with new_position: true.`,
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+const pieceLetter = p => (p.role === 'knight' ? 'n' : p.role[0])[p.color === 'white' ? 'toUpperCase' : 'toLowerCase']();
+
+/** Board arrows ("e2e4 g") and highlighted squares as chessground shapes. */
+function shapesOf(arrows, highlights) {
+  const shapes = [];
+  for (const a of arrows) {
+    const m = /^([a-h][1-8])\s*-?\s*([a-h][1-8])?\s*([grby])?/i.exec(a.trim());
+    if (m) shapes.push({ orig: m[1].toLowerCase(), dest: m[2]?.toLowerCase(), brush: { g: 'green', r: 'red', b: 'blue', y: 'yellow' }[(m[3] || 'g').toLowerCase()] });
+  }
+  for (const h of highlights) if (/^[a-h][1-8]$/i.test(h.trim())) shapes.push({ orig: h.trim().toLowerCase(), brush: 'yellow' });
+  return shapes;
 }
 
 /** A repertoire line (its rows from the initial position) with move numbers and the notes on its moves. */
@@ -335,13 +449,14 @@ const executors = {
     return describeJob(await jobs.wait(id, wait_seconds * 1000));
   },
 
-  async set_board({ fen, moves_from_start: fromStart, moves = [], arrows = [], highlights = [], caption, orientation, ask_move = false }, ctx) {
+  async set_board({ fen, moves_from_start: fromStart, moves = [], arrows = [], highlights = [], caption, orientation, ask_move = false, new_position = false }, ctx) {
     if (!fen && !fromStart) throw new ToolError('Give the position: fen, or moves_from_start (the moves from the initial position that lead to it).');
     // How the position arises from the initial position, when that is known: the coach's own moves, the line on the
     // student's board, or the opening book. The board shows those moves (the Openings board plays them out).
     let pos;
     let path = null;
     let pathFrom = null;
+    let played = null; // a move or two after a position of the student's line: the board plays them there
     if (fromStart) {
       const r = playLine(INITIAL_FEN, fromStart);
       if (r.error) throw new ToolError(`moves_from_start: ${r.error}`);
@@ -350,12 +465,24 @@ const executors = {
       pos = r.pos;
       path = r.steps;
       pathFrom = 'moves';
-    } else pos = safePos(fen);
-    const start = fenOf(pos);
-    if (!path) {
-      path = pathOnBoard(ctx.screen, keyOf(pos));
-      if (path) pathFrom = 'board';
+    } else {
+      pos = safePos(fen);
+      // A FEN that is a move or two from the student's board is taken as those moves — the board keeps its game and
+      // side —, and one a few squares off it is refused: a move the coach wrote as a FEN with a slip.
+      const board = new_position ? null : boardLine(ctx.screen);
+      const fit = board && fitOnBoard(board, pos);
+      if (fit?.near) throw new ToolError(nearMessage(board, fit.near, pos));
+      if (fit?.ucis) {
+        const r = playLine(fenOf(board.positions[fit.from]), fit.ucis);
+        played = { from: fenOf(board.positions[fit.from]), ucis: r.steps.map(s => s.uci) };
+        pos = r.pos; // (its castling rights and en passant square as the moves make them)
+      } else if (fit) pos = board.positions[fit.at];
+      if (fit && board.standard) {
+        path = playLine(INITIAL_FEN, [...board.ucis.slice(0, fit.ucis ? fit.from : fit.at), ...(played?.ucis || [])]).steps;
+        pathFrom = 'board';
+      }
     }
+    const start = fenOf(pos);
     if (!path) {
       const ucis = bookPathTo(keyOf(pos));
       if (ucis) {
@@ -369,20 +496,15 @@ const executors = {
       if (r.error) throw new ToolError(r.error);
       line = r.steps.map(s => ({ san: s.san, uci: s.uci, fen: s.fen }));
     }
-    const shapes = [];
-    for (const a of arrows) {
-      const m = /^([a-h][1-8])\s*-?\s*([a-h][1-8])?\s*([grby])?/i.exec(a.trim());
-      if (m) shapes.push({ orig: m[1].toLowerCase(), dest: m[2]?.toLowerCase(), brush: { g: 'green', r: 'red', b: 'blue', y: 'yellow' }[(m[3] || 'g').toLowerCase()] });
-    }
-    for (const h of highlights) if (/^[a-h][1-8]$/i.test(h.trim())) shapes.push({ orig: h.trim().toLowerCase(), brush: 'yellow' });
     ctx.emit({
       type: 'ui',
       action: 'set_board',
       fen: start,
       path: path ? path.map(s => ({ uci: s.uci, san: s.san })) : null,
       pathFrom,
+      played,
       line,
-      shapes,
+      shapes: shapesOf(arrows, highlights),
       caption: caption ? String(caption).slice(0, 300) : null,
       orientation: orientation || null,
       askMove: ask_move,
@@ -396,6 +518,33 @@ const executors = {
     return ask_move
       ? `Shown on the student's board (${sideName(pos.turn)} to move).${how} They will answer by playing a move; end your turn now and wait for it.`
       : `Shown on the student's board${line.length ? ` with a ${line.length}-move line to step through` : ''}.${how}`;
+  },
+
+  async make_move({ moves, arrows = [], highlights = [], caption, ask_move = false }, ctx) {
+    if (ctx.screen?.view === 'play')
+      throw new ToolError("The student is playing a game against Stockfish, which makes the other side's moves. To show them something else, use set_board (it asks them to pause their game).");
+    const board = boardLine(ctx.screen);
+    if (!board) throw new ToolError("The student's screen shows no board to play on: put the position there with set_board first.");
+    const from = board.positions.at(-1);
+    const r = playLine(fenOf(from), moves);
+    if (r.error) throw new ToolError(`${r.error}. make_move plays from the position on the student's board (get_board_state shows it).`);
+    const played = { from: fenOf(from), ucis: r.steps.map(s => s.uci) };
+    const path = board.standard ? playLine(INITIAL_FEN, [...board.ucis, ...played.ucis]).steps : null;
+    ctx.emit({
+      type: 'ui',
+      action: 'set_board',
+      fen: r.fen,
+      path: path ? path.map(s => ({ uci: s.uci, san: s.san })) : null,
+      pathFrom: path ? 'board' : null,
+      played,
+      line: [],
+      shapes: shapesOf(arrows, highlights),
+      caption: caption ? String(caption).slice(0, 300) : null,
+      orientation: null,
+      askMove: ask_move,
+    });
+    const end = r.pos.isCheckmate() ? ', checkmate' : r.pos.isStalemate() ? ', stalemate' : '';
+    return `Played ${formatLine(from, r.steps.map(s => s.san))} on the student's board (${sideName(r.pos.turn)} to move${end}).${ask_move ? ' They will answer by playing a move; end your turn now and wait for it.' : ''}`;
   },
 
   async switch_screen({ screen, tab }, ctx) {

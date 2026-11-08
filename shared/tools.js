@@ -216,7 +216,7 @@ export const TOOL_DEFS = [
   {
     name: 'set_board',
     description:
-      "Show a position on the student's board (on the screen they are on: the analysis board, the Openings board or a lesson), optionally with a line they can step through, arrows and highlighted squares. To show an opening or a position from one, give moves_from_start — the moves from the initial position — instead of (or with) fen: the board plays them out move by move, so the student sees the opening unfold and can step back through it and branch off into other lines. Set ask_move to true to ask the student to find a move there: their move will arrive as their next message, so end your turn after asking.",
+      "Show a position on the student's board (on the screen they are on: the analysis board, the Openings board or a lesson), optionally with a line they can step through, arrows and highlighted squares. To show an opening or a position from one, give moves_from_start — the moves from the initial position — instead of (or with) fen: the board plays them out move by move, so the student sees the opening unfold and can step back through it and branch off into other lines. Set ask_move to true to ask the student to find a move there: their move will arrive as their next message, so end your turn after asking. To play a move on the position the student sees, use make_move instead.",
     input_schema: {
       type: 'object',
       properties: {
@@ -234,7 +234,28 @@ export const TOOL_DEFS = [
         caption: { type: 'string' },
         orientation: { type: 'string', enum: ['white', 'black'] },
         ask_move: { type: 'boolean' },
+        new_position: {
+          type: 'boolean',
+          description: "true for a position of your own that is not the student's position after a move (a fen a few squares off theirs is otherwise refused as a slip).",
+        },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'make_move',
+    description:
+      "Play your move (or a few moves) on the student's board, from the position they see: your reply when you play a game, an exercise or a lesson position out with them. The app checks the moves there, adds them to the board's moves and keeps the board on the student's side. Use it for every move you make on their board, instead of writing the position's FEN. Set ask_move to true when the student answers with a move: it arrives as their next message, so end your turn after.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        moves: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20, description: 'The moves in order, SAN or UCI, e.g. ["Nh6"].' },
+        arrows: { type: 'array', items: { type: 'string' }, maxItems: 12, description: 'Arrows like "e2e4 g" (colour g/r/b/y, optional).' },
+        highlights: { type: 'array', items: { type: 'string' }, maxItems: 16, description: 'Squares to highlight, e.g. "d5".' },
+        caption: { type: 'string' },
+        ask_move: { type: 'boolean' },
+      },
+      required: ['moves'],
       additionalProperties: false,
     },
   },
@@ -554,6 +575,8 @@ export function toolLabel(name, input) {
       return 'Checking the analysis of your games';
     case 'set_board':
       return input?.ask_move ? 'Setting up a question on the board' : 'Showing a position on the board';
+    case 'make_move':
+      return `Playing ${(input?.moves || []).slice(0, 4).join(' ')}${(input?.moves || []).length > 4 ? ' …' : ''} on your board`;
     case 'switch_screen':
       return SCREENS[input?.screen] ? `Switching to the ${SCREENS[input.screen].label} screen` : 'Switching screens';
     case 'set_engine':

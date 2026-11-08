@@ -211,6 +211,7 @@ export class CoachSession {
         token: this.token,
         mcpScript: this.mcpScript,
         model: settings.models[provider],
+        server: settings.server,
         instructions: buildCliInstructions({ language: this.language, profile: this.profile, voiceOn: this.voiceOn }),
       });
     } catch (e) {
@@ -436,7 +437,7 @@ export class CoachSession {
           this.busy = busy;
           this.broadcast(this.status());
         }
-        if (this.provider === 'claude-code' && this.trustKeys < 8) this.answerTrust(screen);
+        if ((this.provider === 'claude-code' || PROVIDERS[this.provider]?.via === 'claude-code') && this.trustKeys < 8) this.answerTrust(screen);
       });
     }, 250);
   }

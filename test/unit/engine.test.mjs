@@ -340,6 +340,59 @@ test('the coach shows a position with the moves that lead to it, and takes the s
   assert.equal(ui.length, n, 'nothing happens on the screen after an error');
 });
 
+test('the coach plays its moves on the student’s board, and a FEN a few squares off their position is refused', async () => {
+  const ui = [];
+  const t = (name, input, screen) => executeTool(name, input, { emit: e => ui.push(e), screen });
+  const last = () => ui.at(-1);
+  // a lesson: the student (White) has played 1. e4, the coach means 1... Nh6
+  const lesson = { view: 'lesson', context: { mode: 'lesson', ucis: ['e2e4'] } };
+  const here = playLine(INITIAL_FEN, ['e4']).fen;
+  const after = playLine(here, ['Nh6']).fen;
+
+  // the knight written as White's, the one on g8 left there: refused, naming the move and what is off
+  const slip = await t('set_board', { fen: 'rnbqkbnr/pppppppp/7N/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 1 2' }, lesson);
+  assert.equal(slip.isError, true);
+  assert.match(slip.content, /closest to the position after Nh6 \(rnbqkb1r\/pppppppp\/7n\//);
+  assert.match(slip.content, /h6 has a White knight \(N\) where it should have a Black knight \(n\); g8 has a Black knight \(n\) where it should have nothing/);
+  assert.match(slip.content, /White's pieces are capital letters/);
+  assert.match(slip.content, /make_move with the move \(moves: \["Nh6"\]\)/);
+  // the right pieces with the wrong side to move: refused too (the board would turn to the coach's side)
+  assert.match((await t('set_board', { fen: after.replace(' w ', ' b ') }, lesson)).content, /it is White to move there, not Black/);
+  const n = ui.length;
+  // the right FEN, whatever its castling field says, is that move from the student's position
+  const right = await t('set_board', { fen: after.replace(' KQkq ', ' - ') }, lesson);
+  assert.equal(right.isError, false, right.content);
+  assert.equal(ui.length, n + 1, 'nothing reached the board before');
+  assert.deepEqual([last().fen, last().played, last().pathFrom], [after, { from: here, ucis: ['g8h6'] }, 'board']);
+  // a position of the coach's own, said so, is shown as it is
+  const own = await t('set_board', { fen: 'rnbqkbnr/pppppppp/7N/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 1 2', new_position: true }, lesson);
+  assert.equal(own.isError, false, own.content);
+  assert.equal(last().played, null);
+  // and one far from theirs needs no word
+  assert.equal((await t('set_board', { fen: '8/8/4k3/8/8/4K3/4P3/8 w - - 0 1' }, lesson)).isError, false);
+
+  // make_move: from the position on the student's board, here one set up for a lesson
+  const START = '8/8/4k3/8/8/4K3/4P3/8 b - - 0 1';
+  const setUp = { view: 'lesson', context: { mode: 'lesson', startFen: START, ucis: ['e6d6'] } };
+  const made = await t('make_move', { moves: ['Kd4'], ask_move: true, caption: 'The opposition' }, setUp);
+  assert.equal(made.isError, false, made.content);
+  assert.equal(made.content, "Played 2. Kd4 on the student's board (Black to move). They will answer by playing a move; end your turn now and wait for it.");
+  assert.deepEqual([last().played, last().path, last().orientation, last().askMove, last().caption], [{ from: playLine(START, ['Kd6']).fen, ucis: ['e3d4'] }, null, null, true, 'The opposition']);
+  const illegal = await t('make_move', { moves: ['Kd5'] }, setUp);
+  assert.equal(illegal.isError, true);
+  assert.match(illegal.content, /Illegal or unreadable move "Kd5" .* Legal moves: .*Kd4.*make_move plays from the position on the student's board/);
+  // not in the student's game against Stockfish, and not where there is no board
+  assert.match((await t('make_move', { moves: ['Kd4'] }, { view: 'play', context: { mode: 'play', ucis: ['e2e4'] } })).content, /Stockfish, which makes the other side's moves/);
+  assert.match((await t('make_move', { moves: ['Kd4'] }, { view: 'reports', context: { report: { id: 1 } } })).content, /shows no board/);
+
+  // in a game on the Board: a position back in it, and one a move after an earlier one (a variation off the game)
+  const game = { view: 'analysis', context: { mode: 'analysis', ucis: ['e2e4', 'e7e5', 'g1f3', 'b8c6'] } };
+  await t('set_board', { fen: playLine(INITIAL_FEN, ['e4', 'e5']).fen }, game);
+  assert.deepEqual([last().played, last().path.map(m => m.uci), last().pathFrom], [null, ['e2e4', 'e7e5'], 'board']);
+  await t('set_board', { fen: playLine(INITIAL_FEN, ['e4', 'e5', 'Nf3', 'd6']).fen }, game);
+  assert.deepEqual([last().played, last().path.map(m => m.uci)], [{ from: playLine(INITIAL_FEN, ['e4', 'e5', 'Nf3']).fen, ucis: ['d7d6'] }, ['e2e4', 'e7e5', 'g1f3', 'd7d6']]);
+});
+
 test('the coach sees whether the student’s Stockfish is on, and switches it on or off', async () => {
   const ui = [];
   const t = (name, input, screen = null) => executeTool(name, input, { emit: e => ui.push(e), screen });

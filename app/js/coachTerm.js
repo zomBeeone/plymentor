@@ -284,8 +284,9 @@ export function hostRequest(type, data = {}, { timeout = 30_000, onEvent } = {})
 // The coach's tools
 
 // The tools that change the screen run one after the other, in the order they came: a set_board (or set_engine) right
-// after (or together with) a switch_screen goes to the new screen.
-const SCREEN_TOOLS = new Set(['switch_screen', 'set_board', 'open_game', 'set_engine', 'start_training_game']);
+// after (or together with) a switch_screen goes to the new screen, and a make_move plays from the position the
+// set_board before it showed.
+const SCREEN_TOOLS = new Set(['switch_screen', 'set_board', 'make_move', 'open_game', 'set_engine', 'start_training_game']);
 let screenTools = Promise.resolve();
 
 function runTool(m) {
@@ -299,9 +300,9 @@ async function execTool({ id, name, arguments: args }) {
   let result;
   try {
     const body = { arguments: args && typeof args === 'object' ? args : {} };
-    // what the student sees; set_board uses the line on their board to play a position out from it, set_engine the
-    // screen they are on
-    if (name === 'get_board_state' || name === 'set_board' || name === 'set_engine') body.screen = currentScreen();
+    // what the student sees; set_board and make_move use the line on their board (a position a move after it goes on
+    // from it), set_engine the screen they are on
+    if (name === 'get_board_state' || name === 'set_board' || name === 'make_move' || name === 'set_engine') body.screen = currentScreen();
     result = await post(`/api/agent/tools/${encodeURIComponent(String(name))}`, body);
     if (name === 'switch_screen' && !result?.isError) await screenShown(SCREENS[body.arguments.screen]?.view, body.arguments.tab);
     if (name === 'start_training_game' && !result?.isError) await screenShown('analysis', null, 'play'); // (the coach looks at the game next)

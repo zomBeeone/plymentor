@@ -524,6 +524,20 @@ async function main() {
     await page.waitFor(`${item('Queen')}.classList.contains('active') && !${item('Back rank')}.classList.contains('active') && /✓ Done/.test(${item('Back rank')}.innerText) && !/Done/.test(${item('Queen')}.innerText)`, { what: 'the second exercise highlighted, the first still done' });
   });
 
+  await step('train: a lesson the coach plays out with the student — its reply played on their board (make_move), a FEN with a slip refused, the board on their side', async () => {
+    await page.click('.tabs .tab', 'Lessons');
+    await page.waitFor(`[...document.querySelectorAll('.xterm-helper-textarea')].some(t => t.offsetParent)`, { what: 'the coach panel' });
+    await ask(page, 'Please play the opposition with me');
+    await page.waitFor(`/lesson shown: ok/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 20000, what: 'the lesson position' });
+    await page.waitFor(`/The opposition/.test(document.querySelector('.board-caption')?.innerText || '')`, { what: 'the position with its caption' });
+    await page.clickSquare('.board-area .cg-wrap', 'e3');
+    await page.clickSquare('.board-area .cg-wrap', 'e4');
+    await page.waitFor(`/make_move: ok/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 20000, what: 'the coach’s reply' });
+    assert(/slip refused: yes/.test(await term(page)), 'the reply written with the wrong side to move was refused');
+    await page.waitFor(`[...document.querySelectorAll('.movelist .ml-move:not(.empty)')].map(m => m.querySelector('span')?.textContent).join(' ') === 'Ke4 Kd6'`, { what: 'the student’s move and the coach’s reply in one game' });
+    assert(await page.eval(`document.querySelector('.board-area .cg-wrap').classList.contains('orientation-white')`), 'the board still faces the student’s side');
+  });
+
   await step('book reader: an EPUB and a PDF added, read aloud, the board plays the moves, the student’s own move, a move clicked, the place kept', async () => {
     const dir = join(TMP, 'e2e-books');
     rmSync(dir, { recursive: true, force: true });
@@ -686,6 +700,7 @@ async function main() {
     const body = await page.eval('document.body.innerText');
     assert(body.includes(HOME), 'the data folder is shown');
     assert(/Not installed — Plymentor can install Codex CLI with OpenAI's official installer/.test(body), 'the other coaches can be installed');
+    assert(/Another model — a model on your computer \(Ollama\)/.test(body), 'another model can be chosen');
     const comments = await page.eval(`[...document.querySelectorAll('label.field')].find(l => l.querySelector('span')?.textContent === 'Automatic move comments')?.querySelector('select')?.value`);
     assert(comments === 'off', `automatic move comments are off by default: ${comments}`);
     assert(!/Chess Coach 1\.x/.test(body) && !/Bring my 1\.x data over/.test(body), 'no 1.x import (although there is 1.x data in the test’s old folder)');

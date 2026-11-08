@@ -1,5 +1,6 @@
 // What the app keeps for the coach on the student's computer, per profile:
-//   %LOCALAPPDATA%\Plymentor\users\<profile id>\settings.json    the coach's settings (which coach, models, start-up prompt)
+//   %LOCALAPPDATA%\Plymentor\users\<profile id>\settings.json    the coach's settings (which coach, models, start-up
+//                                                  prompt, the model server of "another model" and its key)
 //   %LOCALAPPDATA%\Plymentor\users\<profile id>\coach-memory.md  the coach's notes about the student
 //                                                  coach-memory.previous.md  the notes before the coach last rewrote them
 // (Outside OneDrive. The profile id is a UUID checked before it is used in a path; the app has one profile,
@@ -14,7 +15,7 @@ export const HOME_DIR = process.env.PLYMENTOR_HOME || localAppData('Plymentor');
 // the npm copies of the coach programs it installed (cli\) and its portable Node.js (runtime\). Only read, for the 1.x
 // import. PLYMENTOR_LEGACY_HOME moves it (tests).
 export const LEGACY_DIR = process.env.PLYMENTOR_LEGACY_HOME || localAppData('ChessCoach');
-export const PROVIDER_IDS = ['claude-code', 'codex', 'gemini'];
+export const PROVIDER_IDS = ['claude-code', 'codex', 'gemini', 'other'];
 export const MEMORY_SOFT_LIMIT = 12_000;
 const MEMORY_HARD_LIMIT = 40_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -46,9 +47,25 @@ function readJson(file) {
 // ---------------------------------------------------------------------------------------------
 // Settings
 
-const DEFAULTS = { provider: 'claude-code', initialPrompt: '', models: { 'claude-code': '', codex: '', gemini: '' } };
+const DEFAULTS = { provider: 'claude-code', initialPrompt: '', models: { 'claude-code': '', codex: '', gemini: '', other: '' }, server: { url: '', key: '' } };
 // Model names are passed to the CLI as one argument; keep them to plain identifiers.
 const MODEL_RE = /^[\w.:@/[\]-]{0,80}$/;
+// "Another model": the address of its model server, and the key when it needs one — both go only into the coach
+// program's environment.
+const SERVER_KEY_RE = /^[\x21-\x7e]{0,400}$/;
+
+/** A model server's address: '' when none, null when it is no http(s) address. */
+function serverUrl(v) {
+  const s = String(v ?? '').trim();
+  if (!s) return '';
+  if (s.length > 300 || /\s/.test(s)) return null;
+  try {
+    const u = new URL(s);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? s : null;
+  } catch {
+    return null;
+  }
+}
 
 export function normalizeSettings(s = {}) {
   const models = {};
@@ -56,10 +73,12 @@ export function normalizeSettings(s = {}) {
     const m = String(s.models?.[id] ?? '').trim();
     models[id] = MODEL_RE.test(m) ? m : '';
   }
+  const key = String(s.server?.key ?? '').trim();
   return {
     provider: PROVIDER_IDS.includes(s.provider) ? s.provider : DEFAULTS.provider,
     initialPrompt: String(s.initialPrompt ?? '').slice(0, 4000),
     models,
+    server: { url: serverUrl(s.server?.url) || '', key: SERVER_KEY_RE.test(key) ? key : '' },
   };
 }
 
@@ -74,8 +93,11 @@ export function updateSettings(userId, patch = {}) {
     provider: patch.provider ?? cur.provider,
     initialPrompt: patch.initialPrompt ?? cur.initialPrompt,
     models: { ...cur.models, ...(patch.models && typeof patch.models === 'object' ? patch.models : {}) },
+    server: { ...cur.server, ...(patch.server && typeof patch.server === 'object' ? patch.server : {}) },
   });
   if (patch.models) for (const id of PROVIDER_IDS) if (patch.models[id] !== undefined && next.models[id] !== String(patch.models[id]).trim()) throw new Error('Model names may only contain letters, digits and . : @ / [ ] - _');
+  if (patch.server?.url !== undefined && serverUrl(patch.server.url) === null) throw new Error('The model server is an address that starts with http:// or https://, e.g. http://localhost:11434');
+  if (patch.server?.key !== undefined && next.server.key !== String(patch.server.key).trim()) throw new Error('The key may only contain letters, digits and signs, without spaces.');
   writeAtomic(join(userDir(userId), 'settings.json'), JSON.stringify(next, null, 2));
   return next;
 }

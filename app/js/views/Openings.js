@@ -671,7 +671,7 @@ function setBoardFromCoach(ev) {
   stopAnim();
   const before = ctrl.tree;
   const from = ctrl.node;
-  const { tree, node: target } = placeCoachPosition(before, ev, { merge: true });
+  const { tree, node: target } = placeCoachPosition(before, ev, { merge: true, current: from });
   if (ev.line?.length) tree.addLine(target, ev.line.map(m => m.uci));
   os.coachShapes = ev.shapes?.length ? { fen: target.fen, shapes: ev.shapes } : null;
   os.caption = ev.caption ? { fen: target.fen, text: ev.caption } : null;
