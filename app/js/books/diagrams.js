@@ -322,6 +322,44 @@ function morph(map, w, h, n, dilate) {
 }
 
 /**
+ * The parts of a 0/1 map (n × n, 8-connected) of `least` pixels or more that do not reach its sides: a map of them, or
+ * null when there are none.
+ */
+function parts(map, n, least) {
+  const out = new Uint8Array(n * n);
+  const seen = new Uint8Array(n * n);
+  const stack = [];
+  let any = false;
+  for (let start = 0; start < map.length; start++) {
+    if (!map[start] || seen[start]) continue;
+    const comp = [];
+    let side = false;
+    stack.push(start);
+    seen[start] = 1;
+    while (stack.length) {
+      const p = stack.pop();
+      comp.push(p);
+      const x = p % n;
+      const y = (p / n) | 0;
+      if (x === 0 || y === 0 || x === n - 1 || y === n - 1) side = true;
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+          const q = ny * n + nx;
+          if (map[q] && !seen[q]) (seen[q] = 1), stack.push(q);
+        }
+    }
+    if (comp.length >= least && !side) {
+      any = true;
+      for (const p of comp) out[p] = 1;
+    }
+  }
+  return any ? out : null;
+}
+
+/**
  * Whether a dark square's hatching is ink (`ink`: its 0/1 ink at the reading's cut, n × n pixels): its sides — where a
  * piece seldom reaches — have pixels on thin diagonal strokes (ink continuing diagonally, not on a straight run across
  * or down). A small scan's hatching may be lighter grey: no ink at all there.
@@ -358,6 +396,7 @@ export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false, wa
   const n = Math.max(8, Math.round(size) - 2 * inset);
   const dark = new Uint8Array(n * n);
   const lines = wall > ink || bright < 256 ? new Uint8Array(n * n) : null;
+  const light = bright < 256 ? new Uint8Array(n * n) : null;
   let inkCount = 0;
   for (let y = 0; y < n; y++)
     for (let x = 0; x < n; x++) {
@@ -369,7 +408,20 @@ export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false, wa
         inkCount++;
       }
       if (lines && (v < wall || v > bright)) lines[y * n + x] = 1;
+      if (light && v > bright) light[y * n + x] = 1;
     }
+  const t = Math.max(1, Math.round(size / 40));
+  // (a white piece's inside, much lighter than its plain dark square — a part of it as large as a fiftieth of the
+  // square, not a wood grain's light specks, nor a light square's edge at the square's side —, with its outline around
+  // it, as wide as the strokes the shape loses below: the outline, hardly darker than the grain, is the piece's too — a
+  // white pawn's head came out a bishop's narrow top)
+  if (light) {
+    const big = parts(light, n, n * n * 0.02);
+    if (big) {
+      const grown = morph(big, n, n, t, true);
+      for (let i = 0; i < grown.length; i++) lines[i] |= grown[i];
+    }
+  }
   // (a hatched square whose hatching is lighter than the ink — a small scan's grey strokes — is read as a light one:
   // only its pieces are ink)
   const crisp = darkSquare && hatchedInk(dark, n);
@@ -396,7 +448,6 @@ export function cellShape(img, x0, y0, size, { ink = 150, darkSquare = false, wa
   // what is not background, without thin strokes (hatching, outlines), then grown back and filled
   const rest = new Uint8Array(n * n);
   for (let i = 0; i < rest.length; i++) rest[i] = reach[i] ? 0 : 1;
-  const t = Math.max(1, Math.round(size / 40));
   let shape = morph(morph(rest, n, n, t, false), n, n, crisp ? t + 1 : t, true);
   let found = 0;
   for (let y = Math.round(n * 0.1); y < n * 0.9; y++) for (let x = Math.round(n * 0.1); x < n * 0.9; x++) found += shape[y * n + x];
@@ -833,6 +884,29 @@ const START = ['rnbqkbnr', 'pppppppp', '........', '........', '........', '....
 const TYPES = ['p', 'n', 'b', 'r', 'q', 'k'];
 const PIECE_MIN = 0.05; // a silhouette smaller than this share of its square is no piece (a mark, a speck)
 
+/**
+ * A cross drawn on a square — an endgame's key squares, squares a piece may not go to: two thick strokes from corner to
+ * corner of its middle — as a silhouette.
+ */
+function crossShape() {
+  const s = new Float32Array(CELL * CELL);
+  for (let y = 0; y < CELL; y++)
+    for (let x = 0; x < CELL; x++) {
+      const u = (x + 0.5) / CELL;
+      const v = (y + 0.5) / CELL;
+      if (u < 0.1 || u > 0.9 || v < 0.1 || v > 0.9) continue;
+      if (Math.min(Math.abs(u - v), Math.abs(u + v - 1)) / Math.SQRT2 <= 0.06) s[y * CELL + x] = 1;
+    }
+  return s;
+}
+const CROSS = crossShape();
+// (a square's silhouette at least this like the cross is a mark, no piece: the owner's books' crosses are 0.78 like it
+// and more — Amateur to IM's, Silman's endgame course's, The Soviet Chess Primer's —, no piece of theirs 0.68)
+const CROSS_LIKE = 0.74;
+let crossUnit = null;
+/** Whether a square's silhouette is a cross: a mark on the square, no piece (see crossShape). */
+const isCross = shape => dot(unit(shape.silhouette), (crossUnit ||= unit(CROSS))) > 0.4 && likeness(shape.silhouette, CROSS) >= CROSS_LIKE;
+
 /** Two groups of numbers (k-means, k = 2): the value between them, or null when they are not two groups. */
 function split(values) {
   if (values.length < 4) return null;
@@ -863,7 +937,9 @@ function split(values) {
  * 'P'…'k' or '.') and .sure (0…1). Returns { examples, whiteFill (the fill between white and black pieces) }.
  */
 export function readBoards(boards, { examples = [], labels = [] } = {}) {
-  const all = boards.flatMap(b => b.cells.flat().filter(c => c.shape.area >= PIECE_MIN));
+  // (a cross on a square is a mark, read as no piece: it neither teaches nor is read)
+  for (const b of boards) for (const c of b.cells.flat()) if (c.shape.area >= PIECE_MIN && (c.mark = isCross(c.shape))) c.scores = null;
+  const all = boards.flatMap(b => b.cells.flat().filter(c => c.shape.area >= PIECE_MIN && !c.mark));
   // white and black: the share of ink in the silhouette's core, in two groups for this book (and per piece below: a
   // book's white king may be drawn with much ink inside)
   const whiteFill = split(all.map(c => c.shape.fill)) ?? 0.7;
@@ -877,7 +953,7 @@ export function readBoards(boards, { examples = [], labels = [] } = {}) {
       for (let c = 0; c < 8; c++) {
         const cell = b.cells[r][c];
         const p = sq[r * 8 + c];
-        if (p === '.' || cell.shape.area < PIECE_MIN) continue;
+        if (p === '.' || cell.shape.area < PIECE_MIN || cell.mark) continue;
         const e = { type: p.toLowerCase(), white: p !== p.toLowerCase(), dark: cell.darkSquare, fill: cell.shape.fill, area: cell.shape.area, height: cell.shape.height, silhouette: cell.shape.silhouette, seed: true, board: i };
         const key = `${p}${e.dark}`;
         taught.set(key, [...(taught.get(key) || []), e]);
@@ -913,14 +989,14 @@ export function readBoards(boards, { examples = [], labels = [] } = {}) {
     let fit = 0;
     for (let r = 0; r < 8; r++)
       for (let c = 0; c < 8; c++) {
-        const has = b.cells[r][c].shape.area >= PIECE_MIN;
+        const has = b.cells[r][c].shape.area >= PIECE_MIN && !b.cells[r][c].mark;
         if ((START[r][c] !== '.') === has) fit++;
       }
     if (fit < 60) continue;
     for (const r of [0, 1, 6, 7])
       for (let c = 0; c < 8; c++) {
         const cell = b.cells[r][c];
-        if (cell.shape.area >= PIECE_MIN) known.push({ type: START[r][c].toLowerCase(), white: r >= 6, dark: cell.darkSquare, fill: cell.shape.fill, area: cell.shape.area, height: cell.shape.height, silhouette: cell.shape.silhouette, seed: true });
+        if (cell.shape.area >= PIECE_MIN && !cell.mark) known.push({ type: START[r][c].toLowerCase(), white: r >= 6, dark: cell.darkSquare, fill: cell.shape.fill, area: cell.shape.area, height: cell.shape.height, silhouette: cell.shape.silhouette, seed: true });
       }
   }
   // (none yet: the given examples to start from — a common chess font's pieces — until the book's own come; the
@@ -1077,6 +1153,7 @@ function twoFills(values) {
 }
 
 const LIKE_MIN = 0.55; // less like any piece than this: a mark on the square (a dot, an asterisk), not a piece
+const KING_NEAR = 0.2; // a piece less like a king than like what it is by more than this is no king a side lacks
 
 /** A board's pieces from its cells' scores, with the rules of a position (a whole board: one king a side). */
 function placePieces(b, fills, big = Infinity) {
@@ -1112,12 +1189,16 @@ function placePieces(b, fills, big = Infinity) {
     }
   }
   // (and a king a side: a side without one gets the piece most like a king — its colour misread, most often, on a
-  // dark square)
+  // dark square —; on a board with no king at all, only one about as like a king as like any piece: a diagram of pawns
+  // alone, or of a piece's moves, has no kings, and its pawns are none — Amateur to IM's 43 pawns and knights were made
+  // kings so, The Soviet Chess Primer's 50, all 0.2 or more less like a king than like what they are)
   const unsure = x => x.cell.scores.k + (x.cell.darkSquare ? 0.08 : 0);
+  const kingNear = x => x.cell.scores.k >= Math.max(...TYPES.map(t => x.cell.scores[t])) - KING_NEAR;
+  const kingless = !choice.some(x => x.ranked[0] === 'k');
   if (whole)
     for (const white of [true, false]) {
       if (choice.some(x => x.white === white && x.ranked[0] === 'k')) continue;
-      const others = choice.filter(x => x.ranked[0] !== 'k' && x.cell.scores.k >= LIKE_MIN);
+      const others = choice.filter(x => x.ranked[0] !== 'k' && x.cell.scores.k >= LIKE_MIN && (!kingless || kingNear(x)));
       if (!others.length) continue;
       const king = others.reduce((a, x) => (unsure(x) > unsure(a) ? x : a));
       king.ranked = ['k'];

@@ -1,6 +1,7 @@
 // PDF books (Book reader), with pdf.js (Mozilla, Apache-2.0): it is loaded the first time a PDF is opened, renders the
 // pages in its own worker, and gives each page's text. Never with eval (the window's security policy forbids it).
 import { fontBoards } from './diagrams.js';
+import { diagramNumber, namedAt } from './text.js';
 
 let lib = null;
 
@@ -184,6 +185,51 @@ export async function pageBoxes(doc, n) {
   } finally {
     page.cleanup();
   }
+}
+
+/**
+ * A page's lines of words (`items` with boxes, `words(item)`: it has some): the items whose bottoms are level, cut where
+ * a gap wider than 2% of the page parts them (columns side by side): [{ x0, x1, y: its middle }].
+ */
+function lines(items, words) {
+  const out = [];
+  for (const it of items.filter(words).sort((a, b) => a.box[3] - b.box[3] || a.box[0] - b.box[0])) {
+    const l = out.find(l => Math.abs(l.bottom - it.box[3]) < 0.004 && it.box[0] - l.x1 < 0.02 && l.x0 - it.box[2] < 0.02);
+    if (l) (l.x0 = Math.min(l.x0, it.box[0])), (l.x1 = Math.max(l.x1, it.box[2]));
+    else out.push({ x0: it.box[0], x1: it.box[2], bottom: it.box[3], y: (it.box[1] + it.box[3]) / 2 });
+  }
+  return out;
+}
+
+/**
+ * Where a board found in a picture of a page with text goes in that text (`items`: pageBoxes', of `text`; `box`: the
+ * board's, as shares of the page): before the first line under it — its caption, maybe — or, set in the text with lines
+ * beside it, before the first line level with it, whichever the text has first (a caption may be read in the middle of
+ * the lines beside it); when its caption numbers it ("DIAGRAM 10.") and the page's text names it ("Look at Diagram 10
+ * again: …"), where the text names it — the caption of a board beside the text may be read before those lines, or after
+ * their moves, which are played from the board. { at, number: the one its caption gives it (words far after it may name
+ * it: "Exercise 4 (Diagram 61): … 1...Rd2+"), caption: the caption's text when the board went where it is named (its
+ * side to move goes with it: "DIAGRAM 7. White is to move"), else null }.
+ */
+export function boardAt(items, text, box) {
+  const words = it => !!it.box && /\p{L}{2}/u.test(text.slice(it.start, it.end));
+  const middle = it => (it.box[1] + it.box[3]) / 2;
+  const under = items.find(it => it.box && it.box[1] >= box[3] - 0.01 && it.box[0] < box[2] && it.box[2] > box[0]);
+  // (a line of words — not a coordinate — whose middle is level with the board, left or right of it: the board is set
+  // in the text when a line right over or under it runs across it and the lines beside it — not in a column of its
+  // own, with another column beside it, Zurich 1953's —; not the page's top line or its last, a running head or a foot)
+  const beside = items.find(it => words(it) && (it.box[2] <= box[0] || it.box[0] >= box[2]) && middle(it) > box[1] && middle(it) < box[3]);
+  const [left, right] = beside ? [Math.min(box[0], beside.box[0]), Math.max(box[2], beside.box[2])] : [];
+  const near = l => (l.y > box[1] - 0.08 && l.y < box[1]) || (l.y > box[3] && l.y < box[3] + 0.08);
+  const all = beside ? lines(items, words).sort((a, b) => a.y - b.y) : [];
+  const set = all.slice(1, -1).some(l => near(l) && l.x0 < left + 0.03 && l.x1 > right - 0.03);
+  const at = Math.min(under ? under.start : text.length, set ? beside.start : text.length);
+  if (!under) return { at, number: null, caption: null };
+  const eol = text.indexOf('\n', under.start);
+  const end = eol < 0 ? text.length : eol;
+  const number = diagramNumber(text.slice(under.start, end));
+  const named = number ? namedAt(text, number, [under.start, end]) : null;
+  return named === null ? { at, number, caption: null } : { at: named, number, caption: text.slice(under.start, end) };
 }
 
 /**

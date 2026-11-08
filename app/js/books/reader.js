@@ -6,9 +6,9 @@
 // - A reading goes through the parts of the sentences (voice.js says them: a part ends with a move, which the board
 //   plays once it has been said), from any sentence, at a speed, until it is paused, the book ends or the coach talks.
 import { findMoves, findSentences, spokenParts } from './text.js';
-import { BookMoves } from './moves.js';
+import { BookMoves, sideMarked } from './moves.js';
 import { openEpub } from './epub.js';
-import { openPdf, closePdf, readPageText, pageBoxes, pdfVersion } from './pdf.js';
+import { openPdf, closePdf, readPageText, pageBoxes, boardAt, pdfVersion } from './pdf.js';
 import { Scanner } from './scan.js';
 import { bookFile, loadCache, saveCache, saveBook } from './library.js';
 import { startReading, prepareReading, cancelReading, readAloud, stopSpeaking } from '../voice.js';
@@ -20,7 +20,7 @@ const TEXT_CACHE = 6;
 const pause = () => new Promise(resolve => setTimeout(resolve, 0));
 
 function makeUnit(index, title, text, more, { readings = !!more?.ocr } = {}) {
-  const moves = findMoves(text, { ocr: readings });
+  const moves = findMoves(text, { ocr: readings, scan: !!more?.ocr });
   return { index, title, text, moves, sentences: findSentences(text, moves), diagrams: [], ...more };
 }
 
@@ -47,7 +47,7 @@ function applyFix(d, fix) {
 function pageUnit(u, page, fixes = {}) {
   const diagrams = (page.diagrams || []).map((d, k) => {
     // (its side to move: a chess font's mark, or a picture's: board.side)
-    const out = { at: d.at, placement: d.placement || null, side: d.side || d.board?.side || null, font: !!d.font, sure: d.sure, alts: d.alts, box: d.box, label: d.label || null, kind: 'diagram', unit: u, index: k };
+    const out = { at: d.at, placement: d.placement || null, side: d.side || d.board?.side || null, font: !!d.font, sure: d.sure, alts: d.alts, box: d.box, label: d.label || null, number: d.number || null, kind: 'diagram', unit: u, index: k };
     return applyFix(out, fixes[fixKey(out)]);
   });
   return makeUnit(u, `Page ${u + 1}`, page.text, { items: page.items, diagrams, ocr: !!(page.scan && page.scanned) }, { readings: true });
@@ -80,10 +80,11 @@ class Book {
   }
 
   track(unit) {
-    this.moves.follow(unit);
+    const before = this.moves.follow(unit);
     // what the voice says: a part ends with each move the board plays (not a move only said again), and with each
-    // diagram it shows
-    for (const s of unit.sentences) s.parts = spokenParts(unit.text, s, unit.moves, m => !!m.node && !m.restated, unit.diagrams);
+    // diagram it shows — made again for the units before whose moves got their place only now (moves.js: a reply a
+    // later move showed, moves written before their diagram)
+    for (const u of [unit, ...before]) for (const s of u.sentences) s.parts = spokenParts(u.text, s, u.moves, m => !!m.node && !m.restated, u.diagrams);
   }
 
   /** Follows the moves of the whole book again (the reading of a diagram changed), a few units at a time. */
@@ -157,20 +158,37 @@ class Book {
   }
 }
 
-// The version of what is kept of an EPUB's pictures: 4 since a white piece on a plain dark square is whole however
-// broken its thin outline (3: a picture's mark of the side to move is read, and a plain square's grey outlines keep its
-// pieces whole).
-const PICTURES = 4;
+// The version of what is kept of an EPUB's pictures: when it changes, each picture is looked at again (diagrams.js
+// findPictureBoard). 5 since a white piece's light inside on a plain dark square keeps the faint outline around it
+// (diagrams.js cellShape); 4 since a white piece on a plain dark square is whole however broken its thin outline (3: a
+// picture's mark of the side to move is read, and a plain square's grey outlines keep its pieces whole).
+const PICTURES = 5;
 // The version of how the boards in a PDF's pictures are looked at (diagrams.js findPictureBoard): when it changes, the
 // boards of its pages with their own text — diagrams in pictures, a page's scan behind its text — are looked for again
-// (quick: no OCR; a scanned page's are not, its words would be read again too). 1 since a white piece on a plain dark
-// square is whole however broken its thin outline (Mastering Endgame Strategy's pawns on its orange squares).
-const BOARDS = 1;
+// (quick: no OCR; a scanned page's go with its words: SCANS). 2 since a board beside the text goes before the first
+// line level with it, one whose caption numbers it where the page's text names it, and that number is kept (pdf.js
+// boardAt), and since a white piece's light inside on a plain dark square keeps the faint outline around it
+// (diagrams.js cellShape: Mastering Endgame Strategy's white pawns were read as bishops, its white bishops as Black's);
+// 1 since a white piece on a plain dark square is whole however broken its thin outline (Mastering Endgame Strategy's
+// pawns on its orange squares).
+const BOARDS = 2;
+// The version of how a scanned page is read — its words by OCR (ocr.js), its boards in its picture (diagrams.js
+// findBoards) —: when it changes, the pages the app read by OCR are read again, words and boards, in the background
+// and the page being read first, as when the book was opened the first time (a page with its own text is not; the
+// student's fixes, kept by where a board is, stay theirs). 1 since a game's moves set as a table are read in their
+// column, Black's move on a row whose number and dots the OCR misread is Black's (ocr.js blackRows), a board's
+// coordinates are no text, and a board on a page in one column goes before the first line under it, however short.
+const SCANS = 1;
 // The version of how a book's boards are read (diagrams.js readBoards): when it changes, the boards kept from before —
-// a scanned PDF's, an EPUB's pictures' — are read again (not looked for again). 4 since a known position's squares that
-// plainly show another piece teach nothing (3: four of the app's piece sets to start from, the book's known positions
-// teaching its pieces).
-const READING = 4;
+// a scanned PDF's, an EPUB's pictures' — are read again (not looked for again). 5 since a cross drawn on a square is a
+// mark, no piece — nor a known position's piece there teaching one —, and a board with no king gets one only from a
+// piece about as like a king as like what it is (a diagram of key squares, of pawns alone); 4 since a known position's
+// squares that plainly show another piece teach nothing (3: four of the app's piece sets to start from, the book's
+// known positions teaching its pieces).
+const READING = 5;
+
+// How a PDF's pages were scanned, as its cache keeps it (see scanAgain).
+export const SCANNED = { boards: BOARDS, scans: SCANS };
 
 /** The positions known of a book's boards, as readBoards takes them: what the student set, or what the reading found. */
 const labelOf = d => (d?.fixed ? d.placement : d?.known || null);
@@ -321,6 +339,16 @@ class EpubDiagrams {
   }
 }
 
+/**
+ * A PDF's pages kept from before (`cache`) that were scanned another way than today's — the boards of a page with its own
+ * text looked for the older way (BOARDS), a scanned page read the older way (SCANS) —: scanned again (`scanned` false),
+ * their boards left out, a scanned page its words too (the student's fixes, kept by where a board is, stay theirs).
+ */
+export function scanAgain(pages, cache) {
+  for (const p of pages)
+    if (p?.scanned && (p.scan ? cache.scans !== SCANS : cache.boards !== BOARDS && p.diagrams?.some(d => d.board))) (p.diagrams = p.diagrams?.filter(d => !d.board)), (p.scanned = false);
+}
+
 /** Opens a book of the library: its units come in the background (book.loaded of book.count; listen with book.listeners). */
 export async function openBook(meta) {
   const file = await bookFile(meta);
@@ -379,10 +407,7 @@ export async function openBook(meta) {
     const cache = await loadCache(meta.id);
     const kept = cache?.version === version && cache.pages?.length === doc.numPages;
     const pages = kept ? cache.pages : new Array(doc.numPages).fill(null);
-    // (boards looked at the older way: those of the pages with their own text looked for again — the student's fixes,
-    // kept by where a board is, stay theirs)
-    if (kept && cache.boards !== BOARDS)
-      for (const p of pages) if (p && !p.scan && p.scanned && p.diagrams?.some(d => d.board)) (p.diagrams = p.diagrams.filter(d => !d.board)), (p.scanned = false);
+    if (kept) scanAgain(pages, cache);
     // what is read of the pages is kept as it comes (a scanned book takes long), and when the book is closed
     let dirty = false;
     let savedAt = Date.now();
@@ -396,7 +421,7 @@ export async function openBook(meta) {
       if (!now && Date.now() - savedAt < 20000) return;
       dirty = false;
       savedAt = Date.now();
-      return saveCache(meta.id, { version, boards: BOARDS, reading, pages, taught: state.taught }).catch(() => {});
+      return saveCache(meta.id, { version, ...SCANNED, reading, pages, taught: state.taught }).catch(() => {});
     };
     // (the boards kept from before, read as boards were read then: read again, all together)
     if (reading !== READING) {
@@ -522,9 +547,16 @@ async function scanPages(book, pages, todo, save) {
         read++;
         if (page.scan) Object.assign(page, { text: r.text, items: r.items, diagrams: r.diagrams });
         else if (r.diagrams.length) {
-          // a page with text: its boards go before the first line of text under them
+          // a page with text: its boards go before the first line of text under them, or where the text names them
+          // (pdf.js boardAt) — with the side to move their caption gives ("DIAGRAM 7. White is to move") —; the number
+          // their caption gives them is kept (words far after may name it: moves.js)
           const items = await pageBoxes(book.doc, u + 1);
-          for (const d of r.diagrams) d.at = items.find(it => it.box && it.box[1] >= d.box[3] - 0.01 && it.box[0] < d.box[2] && it.box[2] > d.box[0])?.start ?? page.text.length;
+          for (const d of r.diagrams) {
+            const { at, number, caption } = boardAt(items, page.text, d.box);
+            d.at = at;
+            if (number) d.number = number;
+            if (caption && !d.board?.side) d.side = sideMarked('', caption);
+          }
           page.diagrams = [...(page.diagrams || []), ...r.diagrams].sort((a, b) => a.at - b.at);
         }
         page.scanned = true;
