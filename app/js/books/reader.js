@@ -10,7 +10,7 @@ import { BookMoves, sideMarked } from './moves.js';
 import { openEpub } from './epub.js';
 import { openPdf, closePdf, readPageText, pageBoxes, boardAt, pdfVersion } from './pdf.js';
 import { Scanner } from './scan.js';
-import { bookFile, loadCache, saveCache, saveBook } from './library.js';
+import { bookFile, loadCache, saveCache, saveBook, removeBook } from './library.js';
 import { startReading, prepareReading, cancelReading, readAloud, stopSpeaking } from '../voice.js';
 
 // The version of what is kept of a PDF's pages (pdf.js's version goes with it): 6 since chess fonts in Unicode's private
@@ -65,13 +65,19 @@ class Book {
     this.focus = 0; // the unit the student is at (the scanned pages are read from there)
     this.scanning = null; // { done, total } while scanned pages are read
     this.moves = new BookMoves();
+    this.whole = true; // the whole book is read in the background (the Book reader); else only what the coach asks for
+    this.wanted = new Set(); // the units the coach asked for: their pages are scanned first
+    this.tried = new Set(); // the pages a scan was tried on (one that failed is there without what it would have given)
+    this.listed = false; // every unit that needs no scan is there
     this.closed = false;
     this.error = null;
     this.listeners = new Set();
   }
 
   add(unit) {
-    if (unit.index !== this.last + 1) this.moves = new BookMoves();
+    // (out of order: another run of moves — the coach's copy keeps what the book's figurines have been learnt to be, its
+    // pages coming one by one)
+    if (unit.index !== this.last + 1) this.moves = new BookMoves(this.whole ? null : this.moves);
     this.track(unit);
     this.last = unit.index;
     if (!this.units[unit.index]) this.loaded++;
@@ -148,8 +154,27 @@ class Book {
     this.teach?.();
   }
 
+  /** The coach asks for these units: scanned first (a copy opened for it scans nothing else). */
+  want(units) {
+    for (const u of units) this.wanted.add(u);
+    // (an EPUB's boards are read when the chapter asked for comes: see EpubDiagrams.read)
+    if (!this.whole) this.focus = Math.max(...units);
+    this.wake?.();
+  }
+
+  /** Whether unit `i` has all it will have: its scan done, an EPUB chapter's boards read. */
+  isRead(i) {
+    const unit = this.units[i];
+    if (!unit) return false;
+    if (this.format === 'epub') return this.listed || unit.diagrams.every(d => d.placement);
+    const page = this.pages?.[i];
+    return !page || !!page.scanned || !(page.scan || page.picture || page.figures) || this.tried.has(i);
+  }
+
   close() {
+    if (this.closed) return;
     this.closed = true;
+    this.wake?.();
     this.emit();
     this.scanner?.close();
     this.flush?.();
@@ -349,13 +374,36 @@ export function scanAgain(pages, cache) {
     if (p?.scanned && (p.scan ? cache.scans !== SCANS : cache.boards !== BOARDS && p.diagrams?.some(d => d.board))) (p.diagrams = p.diagrams?.filter(d => !d.board)), (p.scanned = false);
 }
 
-/** Opens a book of the library: its units come in the background (book.loaded of book.count; listen with book.listeners). */
-export async function openBook(meta) {
+/** A chapter's text: its blocks one after the other, a blank line between them (each block and run gets its place in it). */
+export function layOut(blocks) {
+  let text = '';
+  for (const b of blocks) {
+    if (b.kind === 'img') {
+      b.at = text.length;
+      continue;
+    }
+    if (text) text += '\n\n';
+    b.start = text.length;
+    for (const r of b.runs) {
+      r.start = text.length;
+      text += r.text;
+    }
+    b.end = text.length;
+  }
+  return text;
+}
+
+/**
+ * Opens a book of the library: its units come in the background (book.loaded of book.count; listen with book.listeners).
+ * Not `whole`: for the coach — what needs a scan is scanned only when asked for (book.want).
+ */
+async function openBook(meta, { whole = true } = {}) {
   const file = await bookFile(meta);
   if (!file) throw new Error('The file of this book is missing: add the book again.');
   if (meta.format === 'epub') {
     const epub = await openEpub(file);
     const book = new Book(meta, epub.chapters.length);
+    book.whole = whole;
     book.epub = epub;
     book.titles = epub.chapters.map(c => c.title);
     (async () => {
@@ -363,21 +411,7 @@ export async function openBook(meta) {
       await pictures.load();
       for (let i = 0; i < epub.chapters.length && !book.closed; i++) {
         const { blocks } = await epub.chapter(i);
-        // the chapter's text: its blocks one after the other, a blank line between them
-        let text = '';
-        for (const b of blocks) {
-          if (b.kind === 'img') {
-            b.at = text.length;
-            continue;
-          }
-          if (text) text += '\n\n';
-          b.start = text.length;
-          for (const r of b.runs) {
-            r.start = text.length;
-            text += r.text;
-          }
-          b.end = text.length;
-        }
+        const text = layOut(blocks);
         const diagrams = await pictures.find(i, blocks);
         const changed = await pictures.read(i, i === epub.chapters.length - 1);
         if (book.closed) break;
@@ -396,17 +430,21 @@ export async function openBook(meta) {
             if (!book.closed) await pictures.save();
           })
           .catch(e => console.warn("the book's boards could not be read again:", e)));
+      book.listed = true;
+      book.emit();
     })().catch(e => ((book.error = e), book.emit()));
     return book;
   }
   const doc = await openPdf(await file.arrayBuffer());
   const book = new Book(meta, doc.numPages);
+  book.whole = whole;
   book.doc = doc;
   (async () => {
     const version = `${TEXT_CACHE}/${pdfVersion()}`;
     const cache = await loadCache(meta.id);
     const kept = cache?.version === version && cache.pages?.length === doc.numPages;
     const pages = kept ? cache.pages : new Array(doc.numPages).fill(null);
+    book.pages = pages;
     if (kept) scanAgain(pages, cache);
     // what is read of the pages is kept as it comes (a scanned book takes long), and when the book is closed
     let dirty = false;
@@ -440,16 +478,27 @@ export async function openBook(meta) {
     }
     book.flush = () => dirty && save(true);
     const scans = [];
+    let slice = performance.now();
     for (let n = 1; n <= doc.numPages && !book.closed; n++) {
       let page = pages[n - 1];
       if (!page) {
         page = pages[n - 1] = await readPageText(doc, n);
         dirty = true;
       }
-      if ((page.scan || page.picture || page.figures) && !page.scanned) scans.push(n - 1);
-      else book.add(pageUnit(n - 1, page, meta.fixes));
-      if (n % 25 === 0) await pause(); // (pages kept from before come all at once: the window goes on meanwhile)
+      if ((page.scan || page.picture || page.figures) && !page.scanned) {
+        scans.push(n - 1);
+        // (the coach's copy: a page with its own text is there before its pictures are looked at, if ever — the moves of
+        // the whole book followed, what its figurines are learnt)
+        if (!book.whole && !page.scan) book.add(pageUnit(n - 1, page, meta.fixes));
+      } else book.add(pageUnit(n - 1, page, meta.fixes));
+      // (pages kept from before come all at once: the window goes on meanwhile — the student may be playing)
+      if (performance.now() - slice > 30) {
+        await pause();
+        slice = performance.now();
+      }
     }
+    book.listed = true;
+    book.emit();
     if (dirty && !book.closed) await save(true);
     if (scans.length && !book.closed) await scanPages(book, pages, scans, save);
     // the book's boards read again with what is known of them — and again each time the student sets a diagram right
@@ -507,9 +556,10 @@ async function teachPdf(book, pages, state) {
 
 /**
  * Reads the scanned pages of a PDF (and the pictures of pages that have text: they may be scans with their text, or
- * diagrams): the page being read first, then the ones after it, then the rest. The boards found in them are read with
- * the book's other boards each time new ones come — a better reading of a board already passed follows the book's
- * moves again.
+ * diagrams): the pages the coach asked for first, then the page being read, the ones after it, then the rest — in a
+ * copy opened for the coach (not `book.whole`), only what it asks for, waiting for that meanwhile. The boards found in
+ * them are read with the book's other boards each time new ones come — a better reading of a board already passed
+ * follows the book's moves again.
  */
 async function scanPages(book, pages, todo, save) {
   const scanner = (book.scanner = new Scanner(book.doc));
@@ -519,8 +569,11 @@ async function scanPages(book, pages, todo, save) {
   pages.forEach((p, u) => p?.diagrams?.forEach((d, k) => d.board && boards.push({ u, k, board: d.board })));
   const take = () => {
     let best = null;
-    for (const u of pending) if (u >= book.focus && (best === null || u < best)) best = u;
-    if (best === null) for (const u of pending) if (best === null || u < best) best = u;
+    for (const u of pending) if (book.wanted.has(u) && (best === null || u < best)) best = u;
+    if (best === null && book.whole) {
+      for (const u of pending) if (u >= book.focus && (best === null || u < best)) best = u;
+      if (best === null) for (const u of pending) if (best === null || u < best) best = u;
+    }
     pending.delete(best);
     return best;
   };
@@ -528,7 +581,11 @@ async function scanPages(book, pages, todo, save) {
   try {
     while (pending.size && !book.closed) {
       const batch = [];
-      while (batch.length < scanner.lanes && pending.size) batch.push(take());
+      for (let u; batch.length < scanner.lanes && pending.size && (u = take()) !== null; ) batch.push(u);
+      if (!batch.length) {
+        await new Promise(resolve => (book.wake = resolve)); // (nothing asked for yet)
+        continue;
+      }
       const results = await Promise.all(
         batch.map((u, lane) =>
           scanner.page(u + 1, lane, { ocr: !!pages[u].scan, figures: pages[u].figures, whole: !!(pages[u].scan || pages[u].picture) }).catch(e => {
@@ -581,8 +638,10 @@ async function scanPages(book, pages, todo, save) {
           }
         });
       }
+      for (const u of batch) book.tried.add(u);
       for (const [i, u] of batch.entries()) book.add(pageUnit(u, results[i] ? pages[u] : { ...pages[u], scanned: false }, book.meta.fixes));
-      if (changed) await book.retrack();
+      // (not for the coach's copy of a book: the whole book, followed again on the window's time, for one page)
+      if (changed && book.whole) await book.retrack();
       book.scanning.done += batch.length;
       save();
       book.emit();
@@ -594,6 +653,78 @@ async function scanPages(book, pages, todo, save) {
     if (!book.closed) save(true);
     book.emit();
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The open books
+
+// One open copy of a book, whoever reads it — the Book reader, the coach's tools (coach.js): a second one would read
+// the same pages again, and what it kept of them (`<id>.text.json`) would replace what the other kept. The coach reads
+// page after page: its copy stays open a while after the last call, two at most.
+const LINGER = 150_000;
+const IDLE_COPIES = 2;
+const copies = new Map(); // book id → { opening: a promise of the book, book, users, readers, timer, idle }
+
+async function shut(id, copy) {
+  clearTimeout(copy.timer);
+  if (copies.get(id) === copy) copies.delete(id);
+  (await copy.opening.catch(() => null))?.close();
+}
+
+/**
+ * A book of the library open, once, for as long as it is held: { book, release() }. `reader`: for the Book reader (the
+ * whole book read in the background; it closes once released) — else for the coach (only what it asks for; it stays open
+ * a while). A copy that was left open for the coach is closed for the Book reader, which reads the book from the start.
+ */
+export async function holdBook(meta, { reader = false } = {}) {
+  let copy = copies.get(meta.id);
+  if (copy && reader && !copy.users) {
+    await shut(meta.id, copy);
+    copy = copies.get(meta.id);
+  }
+  if (!copy) {
+    copy = { opening: openBook(meta, { whole: reader }), book: null, users: 0, readers: 0, timer: 0, idle: 0 };
+    copies.set(meta.id, copy);
+  }
+  copy.users++;
+  if (reader) copy.readers++;
+  clearTimeout(copy.timer);
+  let book;
+  try {
+    book = copy.book = await copy.opening;
+  } catch (e) {
+    if (copies.get(meta.id) === copy) copies.delete(meta.id);
+    throw e;
+  }
+  if (reader) {
+    book.whole = true;
+    book.wake?.();
+  }
+  let held = true;
+  return {
+    book,
+    release() {
+      if (!held) return;
+      held = false;
+      if (reader && !--copy.readers) book.whole = false;
+      if (--copy.users) return;
+      if (reader) return void shut(meta.id, copy);
+      copy.idle = Date.now();
+      copy.timer = setTimeout(() => shut(meta.id, copy), LINGER);
+      const idle = [...copies].filter(([, c]) => !c.users).sort((a, b) => b[1].idle - a[1].idle);
+      for (const [id, c] of idle.slice(IDLE_COPIES)) shut(id, c);
+    },
+  };
+}
+
+/** The open copy of a book, if there is one. */
+export const heldBook = id => copies.get(id)?.book || null;
+
+/** Takes a book out of the library — its open copy closed first (closing, it saves what it keeps of the book). */
+export async function forgetBook(id) {
+  const copy = copies.get(id);
+  if (copy) await shut(id, copy);
+  await removeBook(id);
 }
 
 // ---------------------------------------------------------------------------------------------

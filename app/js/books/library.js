@@ -68,6 +68,8 @@ export const coverUrl = async meta => {
 };
 export const loadCache = id => readJson(`${id}.text.json`);
 export const saveCache = (id, data) => write(`${id}.text.json`, JSON.stringify(data));
+/** What is kept of a book's text, as a file (it may be tens of megabytes: a worker can read it, see books/coach.js). */
+export const cacheFile = id => read(`${id}.text.json`);
 
 /** Adds a book (a File the student chose). Returns { meta, added } — added false when it was there already. */
 export async function addBook(file) {
@@ -107,6 +109,7 @@ export async function addBook(file) {
 
 /** Removes a book and everything kept for it. */
 export async function removeBook(id) {
+  await writing; // (what a copy of the book closing just now is still saving goes too)
   const dir = await folder();
   for await (const [name] of dir.entries()) if (name.startsWith(`${id}.`)) await dir.removeEntry(name).catch(() => {});
 }

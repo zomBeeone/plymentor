@@ -2,12 +2,14 @@
 // Definitions live here because both sides need them: the coach host (desktop/host.js) lists them to the coach, the
 // window runs them.
 // - Most tools run in the window (Stockfish, chess logic, the student's games — app/js/backend/coach/tools.js).
+// - BOOK_TOOLS run in the window's own thread (app/js/books/coach.js): only it can read a PDF or an EPUB.
 // - HOST_TOOLS run in the coach host itself: the coach's notes about the student (a file on the student's computer) and
 //   the game database the student added (a Scid 5 database, kept by the main process).
 // `readOnly` becomes the MCP readOnlyHint annotation.
 import { MOTIF_LABELS } from './motifs.js';
 
 const fenProp = { type: 'string', description: 'Full FEN of the position (6 fields).' };
+const bookProp = { type: 'string', description: 'The book: its id from list_books, or words of its title. Left out: the book the student opened last.' };
 
 /**
  * The app's screens (the tabs at the top) for switch_screen: the window's route (view), the tabs inside a screen, and
@@ -451,6 +453,42 @@ export const TOOL_DEFS = [
     },
   },
   {
+    name: 'list_books',
+    readOnly: true,
+    description: "The chess books the student added to the app's Book reader (PDF or EPUB): id, title, author, length, and how far they have read. With `book`, also that book's table of contents.",
+    input_schema: { type: 'object', properties: { book: bookProp }, additionalProperties: false },
+  },
+  {
+    name: 'read_book',
+    readOnly: true,
+    description:
+      "Reads pages of one of the student's books, as the Book reader has them: the text, the moves in plain notation wherever the app could follow them, and each diagram at its place as a FEN to show with set_board. A scanned page the app has not read yet is read now, which can take a minute or two.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        book: bookProp,
+        page: { type: 'integer', minimum: 1, description: "The page as the Book reader numbers it (the PDF's own count: the number printed on a page can differ); in an EPUB, the chapter. Left out: where the student is in the book." },
+        pages: { type: 'integer', minimum: 1, maximum: 10, description: 'How many pages from there (default 1).' },
+        part: { type: 'integer', minimum: 1, description: 'A long chapter comes in parts: which one (default 1).' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'search_books',
+    readOnly: true,
+    description: "Finds words in the student's books — in all of them or in one (`book`) — and answers with the pages and a snippet of each, the best first, to read with read_book. The answer says what could not be searched (a scanned page is searched once the app has read it).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The words to find together on a page (isolated queen pawn), or a "phrase in quotes".' },
+        book: { type: 'string', description: 'One book: its id from list_books, or words of its title. Left out: all their books.' },
+      },
+      required: ['query'],
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'speak',
     readOnly: true,
     description:
@@ -492,6 +530,9 @@ export const TOOL_DEFS = [
 
 /** Tools the coach host answers itself: the coach's notes and the game database (both kept by the main process). */
 export const HOST_TOOLS = new Set(['get_player_memory', 'update_player_memory', 'database_explorer', 'get_database_game']);
+
+/** The student's books. */
+export const BOOK_TOOLS = new Set(['list_books', 'read_book', 'search_books']);
 
 /** Tool definitions in MCP form. */
 export const MCP_TOOLS = TOOL_DEFS.map(t => ({
@@ -591,6 +632,12 @@ export function toolLabel(name, input) {
       return 'Updating your repertoire';
     case 'start_training_game':
       return 'Starting a game against Stockfish';
+    case 'list_books':
+      return 'Looking at your books';
+    case 'read_book':
+      return input?.page ? `Reading your book, page ${input.page}` : 'Reading your book';
+    case 'search_books':
+      return `Looking in your books: ${input?.query ?? ''}`;
     case 'get_player_memory':
       return 'Reading my notes about you';
     case 'update_player_memory':

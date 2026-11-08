@@ -21,8 +21,8 @@ import { readingEngine, warmReading, stopSpeaking } from '../voice.js';
 import { useCoachScreen } from '../coachTerm.js';
 import { Tree, placeCoachPosition } from '../tree.js';
 import { INITIAL_FEN } from '../chess.js';
-import { listBooks, addBook, removeBook, getBook, saveBook, coverUrl } from '../books/library.js';
-import { openBook, Reading } from '../books/reader.js';
+import { listBooks, addBook, getBook, saveBook, coverUrl } from '../books/library.js';
+import { holdBook, forgetBook, Reading } from '../books/reader.js';
 import { hiddenSquares } from '../books/moves.js';
 import { PdfPage, EpubPage, ZOOM } from '../books/page.js';
 
@@ -103,7 +103,7 @@ function Library() {
   };
   const remove = async b => {
     if (!confirm(`Remove “${b.title}” from your books? (The file you added it from stays where it is.)`)) return;
-    await removeBook(b.id);
+    await forgetBook(b.id);
     load();
   };
   const drop = e => {
@@ -126,7 +126,8 @@ function Library() {
         too, and the board plays each move as the reading gets to it and shows the book's diagrams. Click a sentence to read from there, or a move or a diagram to see it on
         the board. Try moves of your own on the board too, or go back and on through the moves with ← and →: the reading pauses, and once it goes on, the board comes
         back to the book with its next move. Type a page's number to go straight to it. Scanned books are read too (their text is recognised on this computer, which
-        takes a while). Your books stay on this computer.
+        takes a while). Your coach can look things up in your books and read their pages for you. Your books stay on this computer: only the pages your coach reads go,
+        with your conversation, to its AI service.
       </p>
       ${books && !books.length
         ? html`<div class="card book-drop">
@@ -196,13 +197,16 @@ function Reader({ id }) {
 
   useEffect(() => {
     let alive = true;
-    let b = null;
+    let held = null;
     (async () => {
-      const m = await getBook(id);
-      if (!m) throw new Error('This book is not in your books any more.');
-      meta.current = m;
-      b = await openBook(m);
-      if (!alive) return b.close();
+      const got = await getBook(id);
+      if (!got) throw new Error('This book is not in your books any more.');
+      meta.current = got;
+      held = await holdBook(got, { reader: true });
+      if (!alive) return held.release();
+      const b = held.book;
+      // (the copy's own: the coach may be reading the same book, and what is changed of it is saved from one object)
+      const m = (meta.current = b.meta);
       reading.current = new Reading(b, {
         at: m.at ? { unit: Math.min(m.at.unit, b.count - 1), sentence: m.at.sentence, part: 0 } : undefined,
         onChange: () => (rerender(), keep()),
@@ -227,7 +231,8 @@ function Reader({ id }) {
       alive = false;
       reading.current?.dispose();
       if (saveTimer.current) save(); // (where the student was, now: the screen is going)
-      b?.close();
+      held?.book.listeners.delete(rerender);
+      held?.release();
     };
   }, [id]);
 
@@ -439,7 +444,7 @@ function Reader({ id }) {
       const board = v?.own
         ? "the student is trying out moves of their own on its board, from the book's position (the reading's next move brings the book's position back)"
         : 'its board shows the position the reading has reached';
-      const note = `The student is reading the chess book “${meta.current.title}”${meta.current.author ? ` by ${meta.current.author}` : ''} in the Book reader, ${where}; ${board}.`;
+      const note = `The student is reading the chess book “${meta.current.title}”${meta.current.author ? ` by ${meta.current.author}` : ''} in the Book reader, ${where}; ${board}. read_book gives you the text.`;
       if (!v) return { mode: 'book', ucis: [], note }; // (the board shows the initial position until the book's first move)
       return { mode: 'book', startFen: v.tree.isStandardStart ? undefined : v.tree.startFen, ucis: v.tree.ucis(v.node), note };
     },

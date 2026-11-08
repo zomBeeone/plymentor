@@ -34,6 +34,31 @@ export async function pdfInfo(doc) {
   return { title: String(info?.Title || '').trim(), author: String(info?.Author || '').trim(), pages: doc.numPages };
 }
 
+/** The page (from 1) a bookmark of a PDF goes to, or null. */
+async function destinationPage(doc, dest) {
+  try {
+    const d = typeof dest === 'string' ? await doc.getDestination(dest) : dest;
+    if (!Array.isArray(d)) return null;
+    return (typeof d[0] === 'number' ? d[0] : await doc.getPageIndex(d[0])) + 1;
+  } catch {
+    return null;
+  }
+}
+
+/** A PDF's own table of contents, its bookmarks in order (three levels, `most` at most): [{ title, page, depth }]. */
+export async function pdfOutline(doc, most = 200) {
+  const out = [];
+  const walk = async (items, depth) => {
+    for (const it of items || []) {
+      if (out.length >= most) return;
+      out.push({ title: String(it.title || ''), page: await destinationPage(doc, it.dest), depth });
+      if (depth < 2) await walk(it.items, depth + 1);
+    }
+  };
+  await walk(await doc.getOutline().catch(() => null), 0);
+  return out;
+}
+
 /**
  * A page's text as the reader reads it: the text items in their order, a line break after an item that ends a line:
  * { text, items: [{ start, end }], diagrams } — items[i] is the i-th span of the page's text layer. A board set in a

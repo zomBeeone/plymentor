@@ -212,7 +212,7 @@ export const SCANNED_LINES = [
   [1870, 'Both sides have developed their pieces well.'],
 ];
 
-export async function makeScannedPdf(file) {
+export async function makeScannedPdf(file, title = 'Scanned Test Book') {
   const { default: sharp } = await import('sharp');
   const { drawBoard } = await import('../unit/diagram-picture.mjs');
   const W = 1800;
@@ -233,7 +233,7 @@ export async function makeScannedPdf(file) {
     '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 432 648] /Resources << /XObject << /Im1 4 0 R >> >> /Contents 5 0 R >>',
     [`<< /Type /XObject /Subtype /Image /Width ${W} /Height ${H} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length ${pixels.length} >>\nstream\n`, pixels, '\nendstream'],
     `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
-    '<< /Title (Scanned Test Book) /Author (Plymentor Tests) >>',
+    `<< /Title (${title}) /Author (Plymentor Tests) >>`,
   ];
   const parts = [Buffer.from('%PDF-1.4\n', 'latin1')];
   let size = parts[0].length;

@@ -1,6 +1,8 @@
 // The Book reader's worker for diagrams (bundled as /js/bookscan.js): finds the boards in a scanned page's picture or
-// in an EPUB's picture, and reads the positions of a book's boards (diagrams.js), away from the window.
+// in an EPUB's picture, and reads the positions of a book's boards (diagrams.js), away from the window; and finds words
+// in what is kept of a PDF's text, for the coach (coachtext.js), its file being tens of megabytes of JSON at times.
 import { grayFrom, findBoards, findFigureBoards, findPictureBoard, packBoard, unpackBoard, readBoards, placement, pieceExample } from './diagrams.js';
+import { searchPages } from './coachtext.js';
 
 self.onmessage = e => {
   const { id, op } = e.data;
@@ -20,6 +22,11 @@ self.onmessage = e => {
       // (the app's pieces, to start from: e.data.glyphs, grey pictures of them alone on a light square)
       readBoards(boards, { examples: (e.data.glyphs || []).map(g => pieceExample(g.type, g)), labels: e.data.labels || [] });
       self.postMessage({ id, readings: boards.map(b => ({ placement: b.pieces ? placement(b) : null, sure: b.sure || 0, alts: b.alts || [] })) });
+    } else if (op === 'search') {
+      e.data.file
+        .text()
+        .then(text => self.postMessage({ id, ...searchPages(JSON.parse(text).pages || [], e.data.query) }))
+        .catch(err => self.postMessage({ id, error: String(err?.message || err) }));
     } else throw new Error(`unknown request ${op}`);
   } catch (err) {
     self.postMessage({ id, error: String(err?.message || err) });

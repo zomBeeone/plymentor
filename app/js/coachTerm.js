@@ -15,7 +15,8 @@ import { coachSays, stopSpeaking } from './voice.js';
 import { engineSwitches, setEngineSwitch } from './engine.js';
 import { COACH_PROTOCOL, APP_VERSION } from '../../shared/protocol.js';
 import { CLI_TASKS } from '../../shared/prompts.js';
-import { SCREENS, ENGINE_LABELS } from '../../shared/tools.js';
+import { SCREENS, ENGINE_LABELS, BOOK_TOOLS } from '../../shared/tools.js';
+import { bookTool } from './books/coach.js';
 
 const THEME = {
   background: '#161512',
@@ -303,7 +304,8 @@ async function execTool({ id, name, arguments: args }) {
     // what the student sees; set_board and make_move use the line on their board (a position a move after it goes on
     // from it), set_engine the screen they are on
     if (name === 'get_board_state' || name === 'set_board' || name === 'make_move' || name === 'set_engine') body.screen = currentScreen();
-    result = await post(`/api/agent/tools/${encodeURIComponent(String(name))}`, body);
+    // (the student's books: only the window can read a PDF or an EPUB)
+    result = BOOK_TOOLS.has(name) ? await bookTool(name, body.arguments) : await post(`/api/agent/tools/${encodeURIComponent(String(name))}`, body);
     if (name === 'switch_screen' && !result?.isError) await screenShown(SCREENS[body.arguments.screen]?.view, body.arguments.tab);
     if (name === 'start_training_game' && !result?.isError) await screenShown('analysis', null, 'play'); // (the coach looks at the game next)
   } catch (e) {

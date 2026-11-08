@@ -1,6 +1,6 @@
 // A stand-in for Claude Code in the end-to-end test (no subscription used): it reads the MCP configuration the app
 // wrote, starts the plymentor MCP server, lists the tools, and calls some of them whenever the app types a request.
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, appendFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
@@ -148,6 +148,63 @@ async function handle(text) {
     say(`slip refused: ${slip.isError && /White to move there/.test(slip.text) ? 'yes' : 'no'}`);
     const made = await call('make_move', { moves: ['Kd6'], ask_move: true });
     say(`make_move: ${made.isError ? `ERROR ${made.text.slice(0, 60)}` : 'ok'}`);
+    return;
+  }
+  if (/look in my books/i.test(text)) {
+    // list_books, then read_book and search_books on what it lists (short lines: the terminal wraps long ones)
+    const list = await call('list_books', {});
+    const idOf = re => new RegExp(`^- ([0-9a-f]{20}): .*${re}`, 'm').exec(list.text)?.[1];
+    const epub = idOf('— EPUB');
+    const pdf = idOf('“Test Chess Book.*— PDF');
+    const scan = idOf('“Scanned Test Book');
+    const fresh = idOf('“Second Scan');
+    // (each check on a short line, and one line at the end: the terminal shows its last rows only; FAKE_COACH_DUMP: a file
+    // for what a check that failed got)
+    const failed = [];
+    const check = (what, ok, r) => {
+      say(`${what}: ${ok ? 'ok' : `NO ${String(r?.text).slice(0, 50)}`}`);
+      if (ok) return;
+      failed.push(what);
+      if (process.env.FAKE_COACH_DUMP) appendFileSync(process.env.FAKE_COACH_DUMP, `--- ${what}\n${r?.text}\n`);
+    };
+    check('books', (list.text.match(/^- [0-9a-f]{20}: /gm) || []).length === 4, list);
+    const contents = await call('list_books', { book: epub });
+    check('contents', /\n- 2: A Queen's Gambit/.test(contents.text), contents);
+    const chapter = await call('read_book', { book: epub, page: 1 });
+    check('epub', /\[Diagram: r1b1kb1r\/2q2p1p\/p2ppP2\/1pn5\/3NP3\/2N2Q2\/PPP4P\/2KR1B1R w kq - 1 16\]/.test(chapter.text) && /--- Chapter 1: The Najdorf ---/.test(chapter.text) && /\(chapter 2 comes next\.\)/.test(chapter.text), chapter);
+    const old = await call('read_book', { book: pdf, page: 3 });
+    check('notation', /1\. e4 e5 2\. Nf3 Nc6/.test(old.text) && /\(The end of the book\.\)/.test(old.text), old);
+    const two = await call('read_book', { book: pdf, page: 1, pages: 2 });
+    check('two pages', /--- Page 1 ---[^]*--- Page 2 ---/.test(two.text), two);
+    const none = await call('read_book', { book: pdf, page: 99 });
+    check('no such page', none.isError && /has 3 pages/.test(none.text), none);
+    const both = await call('read_book', { book: 'test chess' });
+    check('two books fit', both.isError && /More than one/.test(both.text), both);
+    const unknown = await call('read_book', { book: 'no such book' });
+    check('no such book', unknown.isError, unknown);
+    const found = await call('search_books', { query: 'developed quickly' });
+    check('search all', /found in 2 places/.test(found.text) && found.text.includes(`(${epub})`) && found.text.includes(`(${pdf})`), found);
+    // (a scanned book opened before: what the reader kept of it; one never opened: nothing to search yet)
+    const ruy = await call('search_books', { query: 'Ruy Lopez' });
+    check('search scan', /Scanned Test Book/.test(ruy.text) && new RegExp(`Second Scan.*\\(${fresh}\\): the app has not read it yet`).test(ruy.text), ruy);
+    const page = await call('read_book', { book: scan, page: 1 });
+    check('kept scan', /Ruy Lopez/.test(page.text) && (page.text.match(/\[Diagram/g) || []).length === 2, page);
+    // a scanned book never opened: its page read by OCR now, for the coach, and its diagram shown on the board
+    const read = await call('read_book', { book: fresh, page: 1 });
+    const fen = /\[Diagram[^\]]*: (r1bqkbnr\/1ppp1ppp\/p1n5\/1B2p3\/4P3\/5N2\/PPPP1PPP\/RNBQK2R w KQkq - \d+ \d+)\]/.exec(read.text);
+    check('read now', /Ruy Lopez/.test(read.text) && !!fen, read);
+    const shown = fen && (await call('set_board', { fen: fen[1], caption: 'From your book' }));
+    check('shown', !!shown && !shown.isError, shown);
+    const now = await call('search_books', { query: 'Ruy Lopez', book: fresh });
+    check('search now', /found in 1 place/.test(now.text) && !/Not searched/.test(now.text), now);
+    say(`Books done: ${failed.length ? failed.join(', ') : 'all ok'}.`);
+    return;
+  }
+  if (/what am i reading/i.test(text)) {
+    // the book the student has open: its copy shared with the Book reader
+    const r = await call('read_book', {});
+    say(`reading: ${/“Test Chess Book”.*page 2 of 3/.test(r.text) && /The position the book had reached before this page \(after 15\.\.\.Bf8\)/.test(r.text) ? 'ok' : r.text.slice(0, 60)}`);
+    if (process.env.FAKE_COACH_DUMP) appendFileSync(process.env.FAKE_COACH_DUMP, `--- reading\n${r.text}\n`);
     return;
   }
   if (/give me an endgame/i.test(text)) {

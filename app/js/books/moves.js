@@ -1823,11 +1823,12 @@ function voiced(t) {
  * .tree, .node and .shown (null and false when no position was found), each diagram .tree and .node.
  */
 export class BookMoves {
-  constructor() {
+  /** `before`: the moves followed so far of the same book, when these go on from another place: what its glyphs are carries over. */
+  constructor(before = null) {
     this.tracker = new MoveTracker();
     this.gap = ''; // the text after the last move, up to the next unit
     this.prev = null; // the last move followed
-    this.glyphs = new Map(); // a lost figurine's glyph → { piece letter: moves where only that piece could go }
+    this.glyphs = before?.glyphs || new Map(); // a lost figurine's glyph → { piece letter: moves where only that piece could go }
     this.known = new Map(); // (learnt's answers since the last move learnt from)
     this.labels = new Map(); // a diagram's number (see labelsOf) → the diagram (null: more than one has it)
     this.lastNum = null; // the number of the last numbered move of the text

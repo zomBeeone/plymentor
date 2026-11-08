@@ -692,6 +692,43 @@ async function main() {
     assert(JSON.stringify(said) === '["Scanned Test Book","The pieces stand like this at the start:","1. e4","e5"]', `said: ${JSON.stringify(said)}`);
   });
 
+  await step('the coach reads the student’s books (list_books, read_book, search_books): its moves in plain notation, diagrams as FENs, a scanned page read when asked for; the Book reader then opens that book as it is', async () => {
+    const dir = join(TMP, 'e2e-books');
+    await makeScannedPdf(join(dir, 'second-scan.pdf'), 'Second Scan');
+    await go(page, '#/books');
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 3`, { what: 'the books' });
+    await page.setFiles('input[type=file][accept*=".epub"]', [join(dir, 'second-scan.pdf')]);
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 4`, { timeout: 30000, what: 'a scanned book nobody has opened' });
+    assert(/only the pages your coach reads go/.test(await page.eval('document.body.innerText')), 'the student is told what the coach’s reading sends');
+    await go(page, '#/analysis');
+    await page.waitFor(`[...document.querySelectorAll('.xterm-helper-textarea')].some(t => t.offsetParent)`, { what: 'the coach panel' });
+    await ask(page, 'Please look in my books');
+    await page.waitFor(`/Books done:/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 150000, what: 'the coach going through the books' });
+    assert((await term(page)).includes('Books done: all ok'), `what the coach got of the books: ${(await term(page)).slice(-700)}`);
+    await page.waitFor(`document.querySelector('.board-caption')?.innerText.includes('From your book')`, { what: 'the book’s diagram shown on the board' });
+    // the Book reader opens the book the coach read: what was read of it is there, at once (no OCR again)
+    await go(page, '#/books');
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 4`, { what: 'the books' });
+    await page.click('.book-card', 'Second Scan');
+    await page.waitFor(`document.querySelectorAll('.bk-pdf .textLayer.bk-ocr .bk-m').length >= 13 && document.querySelectorAll('.bk-diagram').length === 2`, { timeout: 15000, what: 'the page the coach had read, kept' });
+    assert(!(await page.eval(`/scanned pages read/.test(document.querySelector('.book-status')?.innerText || '')`)), 'nothing left to scan of it');
+    // the book open in the reader: the coach reads the same copy of it, and the reader goes on after it
+    await go(page, '#/books');
+    await page.waitFor(`document.querySelectorAll('.book-card').length === 4`, { what: 'the books' });
+    await page.click('.book-card', 'PDF · 3 pages');
+    await page.waitFor(`document.querySelector('.book-page-no') && document.querySelectorAll('.bk-pdf .textLayer .bk-m').length > 10`, { timeout: 20000, what: 'the PDF in the reader' });
+    await page.press('g');
+    await page.waitFor(`document.activeElement?.classList.contains('book-page-no')`, { what: 'the page box (g)' });
+    await page.keyboard('2', { enter: true });
+    await page.waitFor(`document.querySelector('.book-page-no').value === '2' && /Queen's Gambit/.test(document.querySelector('.bk-pdf .textLayer')?.textContent || '')`, { timeout: 20000, what: 'page 2 in the reader' });
+    await sleep(1600); // (the place is saved after a second)
+    await page.eval(`(location.hash = '#/analysis', true)`);
+    await page.waitFor(`[...document.querySelectorAll('.xterm-helper-textarea')].some(t => t.offsetParent)`, { what: 'the coach panel' });
+    await ask(page, 'What am I reading?');
+    await page.waitFor(`/reading: /.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 20000, what: 'the coach reading where the student is' });
+    assert((await term(page)).includes('reading: ok'), `the coach at the student's place: ${(await term(page)).slice(-300)}`);
+  });
+
   await step('settings: the coach’s notes, the coach programs, the data folder; no move comments, Lichess token or 1.x import', async () => {
     await go(page, '#/settings');
     await page.waitFor(`[...document.querySelectorAll('textarea')].some(t => /Najdorf/.test(t.value))`, { timeout: 20000, what: 'the notes in Settings' });
