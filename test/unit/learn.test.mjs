@@ -77,13 +77,53 @@ test('the in-betweens: lines not learned first, learned ones still among them', 
   const waiting = line('w', { shown: 1 });
   const learned = line('l', { shown: 1, drilled: 2, learned: true });
   assert.equal(nextStep([waiting, learned], {}, sometimes(0.9)).line, waiting, 'priority');
-  assert.equal(nextStep([waiting, learned], {}, sometimes(0.1)).line, learned, 'but learned lines too');
+  assert.equal(nextStep([waiting, learned], {}, sometimes(0.09)).line, learned, 'but learned lines too');
+  assert.equal(nextStep([waiting, learned], {}, sometimes(0.11)).line, waiting, 'one in-between in ten at most');
   assert.equal(nextStep([learned, line('n')], { sinceDrill: 2 }, sometimes(0.9)).line, learned, 'only a learned one to drill');
   // not the line just done when another can be; among the others those drilled least
   const again = line('x', { shown: 1, drilled: 1 });
   assert.equal(nextStep([waiting, again], { last: 'w' }, sometimes(0.9)).line, again);
   assert.equal(nextStep([waiting], { last: 'w' }, sometimes(0.9)).line, waiting);
   assert.equal(nextStep([waiting, again, line('y', { shown: 1 })], { last: 'y' }, sometimes(0.9)).line, waiting, 'the one drilled least');
+});
+
+test('a learned line comes back once a session at most, and never right after it was done', () => {
+  const waiting = line('w', { shown: 1 });
+  const a = line('a', { shown: 1, drilled: 2, learned: true });
+  const b = line('b', { shown: 1, drilled: 2, learned: true });
+  const takesLearned = sometimes(0.05);
+  assert.equal(nextStep([waiting, a], {}, takesLearned).line, a, 'it can come back');
+  assert.equal(nextStep([waiting, a], { last: 'a' }, takesLearned).line, waiting, 'not right after it was done, though the only learned one');
+  assert.equal(nextStep([waiting, a], { reviewed: new Set(['a']) }, takesLearned).line, waiting, 'once a session');
+  assert.equal(nextStep([waiting, a, b], { reviewed: new Set(['a']) }, takesLearned).line, b, 'the others have their turn');
+  assert.equal(nextStep([a, line('n')], { sinceDrill: 2, reviewed: new Set(['a']) }, sometimes(0.9)).kind, 'learn', 'nothing to drill: the new line');
+  assert.equal(nextStep([a, b], { reviewed: new Set(['a']) }, takesLearned), null, 'all learned: the end, whatever came back');
+});
+
+test('over whole sessions no learned line comes back twice, or right after it was done', () => {
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  for (let run = 0; run < 50; run++) {
+    const lines = Array.from({ length: 12 }, (_, i) => line(`l${i}`));
+    const session = { reviewed: new Set() };
+    let steps = 0;
+    for (let step; (step = nextStep(lines, session, rnd)); steps++) {
+      assert.ok(steps < 500, 'it ends');
+      if (step.kind === 'learn') {
+        step.line.shown++;
+        session.sinceDrill = (session.sinceDrill || 0) + 1;
+      } else {
+        session.sinceDrill = 0;
+        if (step.line.learned) {
+          assert.notEqual(step.line.id, session.last, 'not right after it was done');
+          assert.ok(!session.reviewed.has(step.line.id), 'once a session');
+          session.reviewed.add(step.line.id);
+        } else if (++step.line.drilled >= DRILLS_TO_LEARN) step.line.learned = true;
+      }
+      session.last = step.line.id;
+    }
+    assert.ok(lines.every(l => l.learned));
+  }
 });
 
 test('a whole session ends with every line learned, each gone through once and drilled right twice', () => {

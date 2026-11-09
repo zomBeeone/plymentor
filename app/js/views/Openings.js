@@ -11,7 +11,7 @@ import { engine, useLiveEval, engineSwitches, setEngineSwitch, useEngineSwitch }
 import { Board } from '../components/Board.js';
 import { EvalBar } from '../components/EvalBar.js';
 import { EnginePanel } from '../components/EnginePanel.js';
-import { MoveList, MoveComment, commentMark } from '../components/MoveList.js';
+import { MoveList, MoveComment, NoteBox, commentMark, tooltip } from '../components/MoveList.js';
 import { Explorer } from '../components/Explorer.js';
 import { useCoachHandle } from '../components/coachHandle.js';
 import { CoachPanel } from '../components/CoachPanel.js';
@@ -62,6 +62,9 @@ function repNote(node, color) {
   const key = repKey(node.parent.fen);
   return (os.entries[color] || []).find(e => e.key === key && e.uci === node.uci)?.comment || '';
 }
+
+/** A repertoire move's note, for its box beside the board in a Learn or a Drill; null when it has none. */
+const noteOf = e => (e.comment ? { title: `${Number(e.fen.split(' ')[5]) || 1}${turnOf(e.fen) === 'white' ? '.' : '...'} ${e.san}`, text: e.comment } : null);
 
 /** Leaving the screen in the middle of a line: the board goes straight to where it was heading. */
 function finishAnim() {
@@ -391,8 +394,9 @@ export function Openings({ route }) {
       color,
       group: g ? { id: g.id, name: g.name } : null,
       map: byKey(movesOfLines(lines)),
-      learn: { lines, session: {}, step: null, at: 0, perfect: true },
+      learn: { lines, session: { reviewed: new Set() }, step: null, at: 0, perfect: true },
       feedback: null,
+      note: null,
       correct: 0,
       wrong: 0,
       expected: null,
@@ -411,6 +415,7 @@ export function Openings({ route }) {
     const step = nextStep(l.lines, l.session);
     d.arrows = [];
     d.expected = null;
+    d.note = null;
     if (!step) {
       d.feedback = { kind: 'good', text: `Every line${d.group ? ` of ${d.group.name}` : ''} is learned. Drill them whenever you like.` };
       return rerender();
@@ -437,7 +442,8 @@ export function Openings({ route }) {
       d.firstTry = true;
       if (kind === 'learn') {
         d.arrows = [{ orig: e.uci.slice(0, 2), dest: e.uci.slice(2, 4), brush: 'green' }];
-        d.feedback = { kind: 'info', text: `Your move: ${e.san}${e.comment ? ` — ${e.comment}` : ''}` };
+        d.feedback = { kind: 'info', text: `Your move: ${e.san}` };
+        d.note = noteOf(e);
       }
     } else {
       const step = l.step;
@@ -464,7 +470,8 @@ export function Openings({ route }) {
     if (r.node.uci === want.uci) {
       if (kind === 'drill') d.correct++;
       if (kind === 'drill' && line.learned) post('/api/repertoire/review', { id: want.id, grade: d.firstTry ? 2 : 1 }).catch(() => {});
-      d.feedback = { kind: 'good', text: `✓ ${r.node.label}${want.comment ? ` — ${want.comment}` : ''}` };
+      d.feedback = { kind: 'good', text: `✓ ${r.node.label}` };
+      d.note = noteOf(want);
       l.at++;
       return learnMove();
     }
@@ -511,8 +518,10 @@ export function Openings({ route }) {
     } else {
       l.session.sinceDrill = 0;
       if (!l.perfect) d.feedback = { kind: 'bad', text: 'Not this time: it comes again.' };
-      else if (line.learned) d.feedback = { kind: 'good', text: 'Right, you still know it.' };
-      else {
+      else if (line.learned) {
+        l.session.reviewed.add(line.id); // (played right: it does not come back in this session)
+        d.feedback = { kind: 'good', text: 'Right, you still know it.' };
+      } else {
         line.drilled++;
         record('drilled');
         if (line.drilled >= DRILLS_TO_LEARN) {
@@ -553,6 +562,7 @@ export function Openings({ route }) {
       group: g ? { id: g.id, name: g.name } : null,
       map: byKey(movesOfLines(lines)),
       feedback: { kind: 'info', text: g ? `Play your repertoire moves: ${g.name}.` : 'Play your repertoire moves.' },
+      note: null,
       correct: 0,
       wrong: 0,
       expected: null,
@@ -595,6 +605,7 @@ export function Openings({ route }) {
       if (n.ply)
         setTimeout(() => {
           if (os.drill !== d) return;
+          d.note = null;
           ctrl.setTree(new Tree());
           drillStep();
         }, 1300);
@@ -636,7 +647,8 @@ export function Openings({ route }) {
     const hit = d.expected.find(e => e.uci === r.node.uci);
     if (hit) {
       d.correct++;
-      d.feedback = { kind: 'good', text: `✓ ${r.node.label}${hit.comment ? ` — ${hit.comment}` : ''}` };
+      d.feedback = { kind: 'good', text: `✓ ${r.node.label}` };
+      d.note = noteOf(hit);
       post('/api/repertoire/review', { id: hit.id, grade: d.firstTry ? 2 : 1 }).catch(() => {});
       d.expected = null;
       drillStep();
@@ -688,6 +700,8 @@ export function Openings({ route }) {
   /></div>`;
   const moves = html`<${MoveList} tree=${ctrl.tree} current=${node} onSelect=${n => ctrl.goto(n)} comments=${notes} />`;
   const comment = html`<${MoveComment} node=${node} comments=${notes} />`; // (under the moves: the note of the move on the board)
+  // (a Learn or a Drill has no move list: the note of the move given or just played, in a panel of its own)
+  const moveNote = d?.note && html`<div class="panel move-note"><${NoteBox} title=${d.note.title} texts=${[d.note.text]} /></div>`;
   const find = html`<div class="panel" style="flex:none">
     <div class="panel-head"><span class="title">Find an opening</span></div>
     <div style="padding:8px"><input type="search" style="width:100%" placeholder="Name or ECO, e.g. Najdorf, Caro-Kann Advance, D37" value=${os.query} onInput=${e => search(e.currentTarget.value)} /></div>
@@ -849,12 +863,14 @@ export function Openings({ route }) {
         onDrag=${(dy, f) => split.set({ '--moves-h': px(clamp(f.h + dy, 96, Math.max(96, f.h + f.below - 120))) })}
       /></div>`}
       ${explorer}
+      ${moveNote}
     </div>`}
     <div class="side-col">
       <div class="panel" style="flex:none"><div class="panel-head"><div class="tabs">
         ${sideTabs.map(([id, label]) => html`<button class=${cls('tab', side === id && 'active')} onClick=${() => setSide(id)}>${label}</button>`)}
       </div></div></div>
       ${sidePanel}
+      ${compact && moveNote}
     </div>
     ${importOpen &&
     html`<${ImportRep}
@@ -939,7 +955,7 @@ function RepNode({ fen, map, color, current, onPick, path, depth, seen = new Set
   const single = parts.length === 1;
   return html`${parts.map(
     ({ e, r, p, label }) => html`<span>
-      <span class=${cls('vm', turnOf(e.fen) === color && 'mine', repKey(r.fen) === current && 'active')} title=${e.comment || ''} onClick=${() => onPick(p)}>${label}${e.comment ? commentMark() : null}</span>
+      <span class=${cls('vm', turnOf(e.fen) === color && 'mine', repKey(r.fen) === current && 'active')} title=${e.comment ? tooltip([e.comment]) : ''} onClick=${() => onPick(p)}>${label}${e.comment ? commentMark() : null}</span>
       ${single
         ? html` <${RepNode} fen=${r.fen} map=${map} color=${color} current=${current} onPick=${onPick} path=${p} depth=${depth + 1} seen=${next} />`
         : html`<div class="branch"><${RepNode} fen=${r.fen} map=${map} color=${color} current=${current} onPick=${onPick} path=${p} depth=${depth + 1} seen=${next} /></div>`}

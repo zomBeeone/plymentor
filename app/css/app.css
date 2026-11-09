@@ -211,6 +211,9 @@ body.resizing-y { cursor: row-resize; }
 .board-wrap .cg-wrap { width: 100%; height: 100%; }
 .board-caption { font-size: 13px; color: var(--strong); background: var(--panel); border-radius: 6px; padding: 7px 10px; border-left: 3px solid var(--blue); }
 .board-caption.goal { border-left-color: var(--accent-hi); }
+/* What is written under the board is as wide as the board's controls and has the room the board leaves: a long text
+   scrolls there. It must not widen the board's column (auto: its widest child) or push the controls out of the window. */
+.board-col > .board-caption, .board-col > .feedback { width: calc(var(--board-size) + 22px); min-height: 2.5em; overflow: auto; overflow-wrap: anywhere; }
 .board-controls { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; width: calc(var(--board-size) + 22px); }
 .board-controls .btn.icon { min-width: 36px; justify-content: center; }
 .board-banner { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 20; background: rgb(22 21 18 / 0.88); color: var(--strong); padding: 6px 12px; border-radius: 16px; font-weight: 600; font-size: 13px; pointer-events: none; white-space: nowrap; }
@@ -284,6 +287,9 @@ body.resizing-y { cursor: row-resize; }
 .move-comment .mc-head { display: flex; gap: 6px; align-items: center; font-size: 11.5px; font-weight: 700; color: var(--muted); margin-bottom: 3px; }
 .move-comment p { margin: 0 0 0.45em; white-space: pre-wrap; overflow-wrap: anywhere; }
 .move-comment p:last-child { margin-bottom: 0; }
+/* beside the board in a Learn or a Drill, where there is no move list: the move's note in a panel of its own */
+.panel.move-note { flex: 0 0 auto; max-height: 45%; }
+.panel.move-note .move-comment { flex: 1 1 auto; min-height: 0; max-height: none; border-top: 0; }
 .ml-var { display: block; color: var(--text); }
 .ml-var .vm { cursor: pointer; padding: 1px 3px; border-radius: 3px; }
 .ml-var .vm:hover { background: var(--panel3); }

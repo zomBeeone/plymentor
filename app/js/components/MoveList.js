@@ -49,7 +49,7 @@ function signsOf(node) {
 export const commentMark = () => html`<svg class="cm" viewBox="0 0 16 16" aria-label="has a comment"><path d="M3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H7.2L4 13.8V11h-.5A1.5 1.5 0 0 1 2 9.5v-6A1.5 1.5 0 0 1 3.5 2z" /></svg>`;
 
 /** A move's comments as its tooltip. */
-const tooltip = texts => {
+export const tooltip = texts => {
   const t = texts.join('\n\n');
   return t ? (t.length > 600 ? `${t.slice(0, 600)}…` : t) : undefined;
 };
@@ -137,6 +137,12 @@ export function MoveList({ tree, current, onSelect, result, comments: notes = co
   `;
 }
 
+/** A note in its box: the move it is about, then the text. A long one scrolls inside; another note starts at its top. */
+export const NoteBox = ({ title, texts }) => html`<div class="move-comment" key=${texts.join()}>
+  <div class="mc-head">${commentMark()}<span>${title}</span></div>
+  ${texts.map(t => html`<p>${t}</p>`)}
+</div>`;
+
 /**
  * Under the move list: the comments of the move on the board (at the start, those before the first move), or nothing.
  * comments: as for MoveList.
@@ -144,8 +150,5 @@ export function MoveList({ tree, current, onSelect, result, comments: notes = co
 export function MoveComment({ node, comments: notes = commentsOf }) {
   const texts = node ? notes(node) : [];
   if (!texts.length) return null;
-  return html`<div class="move-comment">
-    <div class="mc-head">${commentMark()}<span>${node.san ? node.label : 'Before the first move'}</span></div>
-    ${texts.map(t => html`<p>${t}</p>`)}
-  </div>`;
+  return html`<${NoteBox} title=${node.san ? node.label : 'Before the first move'} texts=${texts} />`;
 }

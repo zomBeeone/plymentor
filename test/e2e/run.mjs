@@ -589,6 +589,165 @@ async function main() {
     await page.waitFor(`document.querySelector('.board-area .eval-bar') && !document.querySelector('.board-area .eval-bar.off')`, { what: 'the bar back' });
   });
 
+  await step('openings: a very long note stays in a box of its own that scrolls — under the moves, and beside the board in a Learn and a Drill; the board, its controls and the panels do not move', async () => {
+    const NAME = 'Long notes';
+    const sentences = Array.from({ length: 24 }, (_, i) => `Sentence ${i + 1}: the knight heads for its outpost while the pawns hold the centre.`).join(' '); // (a PGN's note is kept up to 2,000 characters)
+    const pgn = `[Event "${NAME}"]\n\n1. e4 {${sentences}} e5 2. Nf3 {${'x'.repeat(1500)}} Nc6 *`;
+    const BOX = '.panel.move-note .move-comment';
+    const folder = `[...document.querySelectorAll('.rep-group')].find(g => g.querySelector('.rep-group-name')?.textContent.includes('Long notes'))`;
+    const groupButton = label => `[...${folder}.querySelectorAll('.rep-group-head button')].find(b => b.textContent.trim() === ${JSON.stringify(label)})`;
+    const inTree = move => `[...${folder}.querySelectorAll('.rep-tree .vm')].find(v => v.textContent.startsWith(${JSON.stringify(move)}))`;
+    const feedback = `document.querySelector('.feedback')?.innerText || ''`;
+    const setSize = async (width, height) => {
+      await page.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+      await sleep(400); // (the columns and the board follow the window)
+    };
+    const boardReady = square => page.waitFor(`[...document.querySelectorAll('.board-area cg-board piece')].some(p => p.cgKey === ${JSON.stringify(square)})`, { what: `the piece on ${square}` });
+    // what a note must not change, what must stay in the window
+    const layout = () =>
+      page.eval(`(box => ({ column: box('.board-col').width, board: box('.board-wrap').width, middle: box('.side-col.middle')?.width ?? 0, side: box('.side-col:not(.middle)').width, controls: box('.board-controls').bottom <= innerHeight, scrolled: document.querySelector('main').scrollTop }))(s => document.querySelector(s)?.getBoundingClientRect())`);
+    const unmoved = async (plain, where) => {
+      const now = await layout();
+      assert(JSON.stringify(now) === JSON.stringify(plain), `${where}: ${JSON.stringify(now)} (without a note: ${JSON.stringify(plain)})`);
+    };
+    const noteFits = async (plain, where, title, body, box = BOX) => {
+      await unmoved(plain, where);
+      const n = await page.eval(`(n => n && { text: n.innerText, scrolls: n.scrollHeight > n.clientHeight, sideways: n.scrollWidth > n.clientWidth, inWindow: n.getBoundingClientRect().bottom <= innerHeight })(document.querySelector(${JSON.stringify(box)}))`);
+      assert(n && n.text.startsWith(title) && body.test(n.text) && n.scrolls && !n.sideways && n.inWindow, `${where}, the note: ${JSON.stringify(n && { ...n, text: n.text.slice(0, 60) })}`);
+    };
+    await go(page, '#/openings');
+    await page.click('.side-col:not(.middle) .tab', 'Repertoire');
+    await page.click('button', 'White repertoire');
+    await page.click('button', 'Import PGN');
+    await page.waitFor(`document.querySelector('.modal textarea')`, { what: 'the import dialog' });
+    await page.type('.modal textarea', pgn);
+    await page.eval(`(s => { s.value = 'new'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })(document.querySelector('.modal select'))`);
+    await page.waitFor(`document.querySelector('.modal input[type=text]')?.placeholder === ${JSON.stringify(NAME)}`, { what: 'the name suggested from the PGN' });
+    await page.click('.modal .btn.primary', 'Import');
+    await page.waitFor(`${folder}?.querySelectorAll('.rep-tree .vm').length === 4`, { what: 'the line in its group' });
+    assert((await page.eval(`${inTree('1. e4')}.title.length`)) <= 601, 'the tooltip of the move in the repertoire is cut short');
+    try {
+      for (const [width, height] of [[1600, 900], [1200, 640]]) {
+        await setSize(width, height);
+        await page.click('.side-col:not(.middle) .tab', 'Repertoire');
+        await page.click('.board-controls button', 'Reset');
+        await boardReady('e2');
+        const plain = await layout();
+        // whatever is written under the board (a coach's long caption, a long message) scrolls there
+        for (const kind of ['board-caption', 'feedback bad']) {
+          await page.eval(`(c => { c.className = ${JSON.stringify(kind)}; c.id = 'long-text'; c.textContent = ${JSON.stringify(sentences)}; document.querySelector('.board-col').insertBefore(c, document.querySelector('.board-controls')); return true; })(document.createElement('div'))`);
+          await unmoved(plain, `${width} px, a long text in .${kind}`);
+          await page.eval(`(document.querySelector('#long-text').remove(), true)`);
+        }
+        if (width > 1280) {
+          // going through the line: the box under the moves; another note starts at its top
+          await page.eval(`${inTree('1. e4')}.click()`);
+          await page.waitFor(`/Sentence 24/.test(document.querySelector('.panel.moves .move-comment')?.innerText || '')`, { what: 'the note under the moves' });
+          await noteFits(plain, 'under the moves', '1. e4', /Sentence 24/, '.panel.moves .move-comment');
+          await page.eval(`(document.querySelector('.panel.moves .move-comment').scrollTop = 200, true)`);
+          await page.eval(`${inTree('2. Nf3')}.click()`);
+          await page.waitFor(`/x{100}/.test(document.querySelector('.panel.moves .move-comment')?.innerText || '')`, { what: 'the next note' });
+          assert((await page.eval(`document.querySelector('.panel.moves .move-comment').scrollTop`)) === 0, 'the next note starts at its top');
+          await page.click('.board-controls button', 'Reset');
+          await boardReady('e2');
+        }
+        // a Learn: the move given and its note, apart; then a note that is one long word
+        await page.eval(`${groupButton('Learn')}.click()`);
+        await page.waitFor(`/^Your move: e4$/.test(${feedback})`, { timeout: 8000, what: 'the first move given, without its note' });
+        await noteFits(plain, `${width} px, the move given`, '1. e4', /Sentence 24/);
+        await boardReady('e2');
+        await page.clickSquare('.board-area .cg-wrap', 'e2', 'white');
+        await page.clickSquare('.board-area .cg-wrap', 'e4', 'white');
+        await page.waitFor(`/^Your move: Nf3$/.test(${feedback})`, { timeout: 8000, what: 'the second move given' });
+        await noteFits(plain, `${width} px, one long word`, '2. Nf3', /x{100}/);
+        await page.click('button', 'Stop learning');
+        await page.waitFor(`!document.querySelector('.feedback') && !document.querySelector('.panel.move-note')`, { what: 'the note gone with the Learn' });
+      }
+      // (still the small window) the line learned, then a Drill: a wrong move, and the note of the right move
+      await page.click('.board-controls button', 'Reset');
+      await boardReady('e2');
+      const plain = await layout();
+      await page.eval(`${groupButton('Learn')}.click()`);
+      await page.waitFor(`/^Your move: e4$/.test(${feedback})`, { timeout: 8000, what: 'the Learn again' });
+      const fromMemory = page.waitFor(`/Now from memory/.test(${feedback}) && (document.querySelector('.panel.move-note') ? 'a note' : 'none')`, { interval: 50, timeout: 60000, what: 'the in-between' });
+      await learnToTheEnd(page, 'white');
+      assert((await fromMemory) === 'none', 'an in-between from memory starts without the note of the line before');
+      await page.click('button', 'Stop learning');
+      await page.waitFor(`${folder} && !${groupButton('Drill')}.disabled`, { what: 'the line learned' });
+      await page.eval(`${groupButton('Drill')}.click()`);
+      await page.waitFor(`/Play your repertoire moves: Long notes/.test(${feedback})`, { what: 'the drill' });
+      await boardReady('d2');
+      await page.clickSquare('.board-area .cg-wrap', 'd2', 'white');
+      await page.clickSquare('.board-area .cg-wrap', 'd4', 'white');
+      await page.waitFor(`/d4 is not in Long notes.*Play e4/.test(${feedback})`, { what: 'the wrong move answered' });
+      await sleep(900); // (the wrong move is taken back)
+      await boardReady('e2');
+      await page.clickSquare('.board-area .cg-wrap', 'e2', 'white');
+      await page.clickSquare('.board-area .cg-wrap', 'e4', 'white');
+      await page.waitFor(`/^✓ 1\\. e4$/.test(${feedback})`, { what: 'the move answered, without its note' });
+      await noteFits(plain, 'a Drill', '1. e4', /Sentence 24/);
+      // the end of the line: its last note stays until the next line starts
+      await boardReady('e5');
+      await sleep(300);
+      await page.clickSquare('.board-area .cg-wrap', 'g1', 'white');
+      await page.clickSquare('.board-area .cg-wrap', 'f3', 'white');
+      await page.waitFor(`/Line complete/.test(${feedback}) && /x{100}/.test(document.querySelector(${JSON.stringify(BOX)})?.innerText || '')`, { what: 'the end of the line, its note' });
+      await page.waitFor(`!document.querySelector('.panel.move-note') && [...document.querySelectorAll('.board-area cg-board piece')].some(p => p.cgKey === 'e2')`, { what: 'the next line, without the note' });
+      await page.click('button', 'Stop drill');
+      // the group goes again, with its lines
+      await page.waitFor(`!document.querySelector('.feedback')`, { what: 'the Drill stopped' });
+      await page.eval(`${folder}.querySelector('button[title="Delete the group"]').click()`);
+      await page.waitFor(`/Delete the group Long notes/.test(document.querySelector('.modal h2')?.innerText || '')`, { what: 'the delete dialog' });
+      await page.click('.modal button', 'Delete it and its lines');
+      await page.waitFor(`!${folder}`, { what: 'the group gone' });
+    } finally {
+      await page.send('Emulation.clearDeviceMetricsOverride');
+    }
+  });
+
+  await step('openings: in a Learn a learned line comes back once at most, however often the in-betweens would take it', async () => {
+    const folder = `[...document.querySelectorAll('.rep-group')].find(g => g.querySelector('.rep-group-name')?.textContent.includes('Three lines'))`;
+    await go(page, '#/openings');
+    await page.click('.side-col:not(.middle) .tab', 'Repertoire');
+    await page.click('button', 'Black repertoire'); // (learnToTheEnd tells whose turn it is from the last move: Black's lines)
+    await page.click('button', 'Import PGN');
+    await page.waitFor(`document.querySelector('.modal textarea')`, { what: 'the import dialog' });
+    await page.type('.modal textarea', `[Event "Three lines"]\n\n1. e4 e5 (1... d5) (1... g6) *`);
+    await page.eval(`(s => { s.value = 'new'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })(document.querySelector('.modal select'))`);
+    await page.waitFor(`document.querySelector('.modal input[type=text]')?.placeholder === 'Three lines'`, { what: 'the name suggested from the PGN' });
+    await page.click('.modal .btn.primary', 'Import');
+    await page.waitFor(`${folder}?.querySelectorAll('.rep-tree .vm').length === 4`, { what: 'the three lines' });
+    // (the random numbers: an in-between takes a learned line whenever one can come; each "you still know it" counted)
+    await page.eval(`(() => {
+      window.ccStill = 0;
+      let last = '';
+      window.ccObserver = new MutationObserver(() => {
+        const t = document.querySelector('.feedback')?.innerText || '';
+        if (t !== last && /still know/.test(t)) window.ccStill++;
+        last = t;
+      });
+      window.ccObserver.observe(document.querySelector('.board-col'), { subtree: true, childList: true, characterData: true });
+      window.ccRandom = Math.random;
+      Math.random = () => 0.01;
+      return true;
+    })()`);
+    try {
+      await page.eval(`[...${folder}.querySelectorAll('.rep-group-head button')].find(b => b.textContent.trim() === 'Learn').click()`);
+      await page.waitFor(`/^Your move: /.test(document.querySelector('.feedback')?.innerText || '')`, { timeout: 8000, what: 'the Learn' });
+      await learnToTheEnd(page, 'black');
+    } finally {
+      await page.eval(`(Math.random = window.ccRandom, window.ccObserver.disconnect(), true)`);
+    }
+    const times = await page.eval('window.ccStill');
+    assert(times === 1, `the learned line came back ${times} times`);
+    await page.click('button', 'Stop learning');
+    await page.waitFor(`!document.querySelector('.feedback')`, { what: 'the Learn stopped' });
+    await page.eval(`${folder}.querySelector('button[title="Delete the group"]').click()`);
+    await page.waitFor(`/Delete the group Three lines/.test(document.querySelector('.modal h2')?.innerText || '')`, { what: 'the delete dialog' });
+    await page.click('.modal button', 'Delete it and its lines');
+    await page.waitFor(`!${folder}`, { what: 'the group gone' });
+  });
+
   await step('train: exercises — the one on the board highlighted in the deck, the ones done marked', async () => {
     await go(page, '#/train');
     await page.waitFor(`document.body.innerText.includes('Generate from my games')`, { what: 'exercises' });

@@ -7,7 +7,7 @@ export const DRILLS_TO_LEARN = 2;
 // (lines gone through but not learned yet: from this many on no new line comes until the in-betweens have caught up)
 const WAITING = 4;
 // (how often an in-between takes a line learned already, when there is one: lines not learned yet have the priority)
-const LEARNED_SHARE = 0.2;
+const LEARNED_SHARE = 0.1;
 
 /** The lines of some repertoire moves from the initial position: [{ id (its moves, uci), moves }], `most` at most. */
 export function linesOf(entries, most = 3000) {
@@ -62,13 +62,15 @@ function pick(list, last, rnd) {
 
 /**
  * What a Learn session does next, from its lines as they stand: { kind: 'learn' | 'drill', line }, or null when all are
- * learned. session: { sinceDrill (new lines since the last in-between), last (the line just done) }.
+ * learned. session: { sinceDrill (new lines since the last in-between), last (the line just done), reviewed (a Set: the
+ * learned lines that have come back and were played right) }.
  */
 export function nextStep(lines, session = {}, rnd = Math.random) {
   const fresh = lines.filter(l => !l.learned && !l.shown);
   const waiting = lines.filter(l => !l.learned && l.shown);
-  const learned = lines.filter(l => l.learned);
   if (!fresh.length && !waiting.length) return null;
+  // (a learned line comes back once a session at most, and never right after it was done)
+  const learned = lines.filter(l => l.learned && l.id !== session.last && !session.reviewed?.has(l.id));
   const since = session.sinceDrill || 0;
   // (an in-between once in a while among new lines; only those when no new line is left, or too many wait for theirs)
   const inBetween = !fresh.length || waiting.length >= WAITING || (since > 0 && (since >= 2 || rnd() < 0.5));
