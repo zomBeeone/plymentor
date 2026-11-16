@@ -585,7 +585,10 @@ function glyphMoves(text, strict) {
 
 const PIECE_WORDS = { K: 'king', Q: 'queen', R: 'rook', B: 'bishop', N: 'knight' };
 
-/** "12. knight to f3", "12... bishop takes e5, check", "castles kingside" (the words of the coach's voice). */
+/**
+ * "12. knight to f3", "12... bishop takes e5, check", "castles kingside" (the words of the coach's voice). The file a
+ * on its own is the word "a" to a voice (the natural voice says "uh takes b5"): "a-pawn takes b5", "a-rook to d1".
+ */
 export function spokenMove(t) {
   let w;
   const castle = /^O-O(-O)?$/.exec(t.san);
@@ -595,8 +598,9 @@ export function spokenMove(t) {
   else {
     const [, piece, file, rank, sep, to, promo] = m;
     const from = `${file || ''}${rank || ''}`;
-    if (piece) w = `${PIECE_WORDS[piece]}${from ? ` from ${from}` : ''} ${sep === 'x' ? 'takes' : 'to'} ${to}`;
-    else if (sep === 'x') w = `${from} takes ${to}`;
+    if (piece && from === 'a') w = `a-${PIECE_WORDS[piece]} ${sep === 'x' ? 'takes' : 'to'} ${to}`;
+    else if (piece) w = `${PIECE_WORDS[piece]}${from ? ` from ${from}` : ''} ${sep === 'x' ? 'takes' : 'to'} ${to}`;
+    else if (sep === 'x') w = `${from === 'a' ? 'a-pawn' : from} takes ${to}`;
     else if (sep === '-') w = `${from} to ${to}`;
     else w = to;
     if (promo) w += `, promoting to a ${PIECE_WORDS[promo]}`;

@@ -244,6 +244,10 @@ test('the coach’s tools run here and validate their input', { skip, timeout: 1
   const loud = await t('speak', { text: 'Hello' });
   assert.equal(loud.isError, false);
   assert.ok(ui.some(e => e.action === 'speak' && e.text === 'Hello'));
+  // a whole reply, however long, goes to the page (it is read like a book there)
+  const lesson = 'The knight on d5 dominates the bishop. '.repeat(500).trim();
+  assert.equal((await t('speak', { text: lesson })).content, 'Said out loud in the app.');
+  assert.equal(ui.findLast(e => e.action === 'speak').text, lesson);
   assert.equal(all('SELECT * FROM exercises').length >= 1, true);
 });
 

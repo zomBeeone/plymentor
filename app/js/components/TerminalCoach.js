@@ -1,11 +1,12 @@
 // The coach panel: the live terminal of the coach session (Claude Code, Codex or Antigravity CLI, run by the app on
-// the student's computer), with the app's quick-request buttons underneath. The student can also type straight into
-// the terminal.
+// the student's computer), with what the coach says under it while its voice is on (read like a book: CoachVoice.js)
+// and the app's quick-request buttons underneath. The student can also type straight into the terminal.
 import { html, useEffect, useRef, useState } from '../../vendor/preact.js';
 import { useStore, toast } from '../store.js';
 import { cls } from '../util.js';
 import { attachTerminal, detachTerminal, coachRequest, interruptCoach, restartCoach, compactMoveEval, focusTerminal, installCoachCli, reconnectNow, startTraining } from '../coachTerm.js';
-import { setVoiceEnabled, stopSpeaking } from '../voice.js';
+import { setVoiceEnabled } from '../voice.js';
+import { CoachVoice } from './CoachVoice.js';
 
 /** Fills the handle the views use (send, note, stop…) with terminal versions. */
 function fillHandle(handle, busy) {
@@ -99,7 +100,6 @@ export function TerminalCoach(props) {
           ? html`${tabs}<span class="spacer"></span>`
           : html`<span class="coach-title grow ellipsis">${props.title || 'Coach'} <span class="muted">· ${label}</span></span>`}
         <span class=${cls('pill', pillKind)}>${pill}</span>
-        ${!small && s.coachSpeaking && html`<button class="btn small ghost" title="Stop talking (the coach keeps working)" onClick=${stopSpeaking}>Quiet</button>`}
         ${!small &&
         html`<button
           class=${cls('btn small voice-toggle', voiceOn ? 'on' : 'ghost', s.coachSpeaking && 'speaking')}
@@ -117,6 +117,7 @@ export function TerminalCoach(props) {
         <div class="term-box" ref=${box} onClick=${focusTerminal}></div>
         ${overlay && html`<div class="term-overlay">${overlay}</div>`}
       </div>
+      ${!small && voiceOn && html`<${CoachVoice} />`}
       <div class="coach-input">
         ${offerStart &&
         html`<div class="start-training">

@@ -373,6 +373,29 @@ body.resizing-y { cursor: row-resize; }
 .term-overlay .card { max-width: 440px; text-align: center; display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .term-overlay h3 { margin: 0; color: var(--strong); }
 .install-log { width: 100%; max-height: 180px; overflow: auto; text-align: left; font-family: var(--mono); font-size: 11.5px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 0; white-space: pre-wrap; color: var(--muted); }
+/* what the coach says while its voice is on, read like a book (components/CoachVoice.js): the sentence being said marked */
+.coach-voice { flex: 0 1 auto; display: flex; flex-direction: column; min-height: 0; max-height: 46%; border-top: 1px solid var(--border); background: var(--panel); outline: none; }
+.coach-voice:focus-visible { box-shadow: inset 0 0 0 1px rgb(54 146 231 / 0.6); }
+.cv-seek { display: block; width: 100%; height: 12px; margin: 0; flex: none; cursor: pointer; }
+.cv-bar { display: flex; align-items: center; gap: 4px; padding: 3px 6px 4px; flex-wrap: wrap; flex: none; }
+.cv-bar .btn.icon { min-width: 30px; justify-content: center; padding: 4px 6px; font-size: 13px; }
+.cv-play { min-width: 92px; justify-content: center; }
+.cv-speed { min-width: 46px; justify-content: center; font-variant-numeric: tabular-nums; }
+.cv-where { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cv-texts { display: inline-flex; align-items: center; gap: 1px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cv-texts .btn.icon { min-width: 24px; padding: 3px 5px; font-size: 15px; }
+.cv-texts .cv-new { color: var(--accent-hi); box-shadow: inset 0 -2px 0 var(--accent-hi); }
+.cv-text { position: relative; flex: 1 1 auto; min-height: 3.2em; max-height: 40vh; overflow-y: auto; padding: 4px 12px 8px; font-size: 13.5px; line-height: 1.55; color: var(--text); overflow-wrap: anywhere; }
+.cv-text > div { margin: 0 0 0.5em; }
+.cv-h { font-weight: 700; color: var(--strong); }
+.cv-li { padding-left: 1.3em; }
+.cv-li::before { content: attr(data-mark); display: inline-block; width: 1.3em; margin-left: -1.3em; color: var(--muted); }
+.cv-text [data-s] { cursor: pointer; border-radius: 3px; transition: background 0.12s; }
+.cv-text [data-s]:hover { background: rgb(255 255 255 / 0.06); }
+.cv-text .cv-quiet { cursor: default; }
+.cv-text .cv-cur, .cv-text .cv-cur:hover { background: rgb(230 180 60 / 0.22); color: var(--strong); box-shadow: 0 0 0 2px rgb(230 180 60 / 0.22); }
+.cv-m { color: #b8dc8a; }
+.cv-line { padding: 0 12px 6px; font-size: 13px; color: var(--strong); cursor: pointer; flex: none; }
 .report-text { margin-top: 12px; padding: 18px 22px; }
 
 /* settings: coach choice */

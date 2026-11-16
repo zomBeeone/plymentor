@@ -1,16 +1,16 @@
-// The coach's voice: plays what the coach says with its speak tool. Two engines, both on the student's computer:
+// The voices: what the coach says (its speak tool, read like a book: coachReading.js), the Book reader's reading, the
+// voice test in Settings. Two engines, both on the student's computer:
 // - natural: Kokoro, a neural voice (js/voice/worker.js) — sounds human; English only; a one-time download (~330 MB;
 //   it runs on the graphics card when there is one);
 // - browser: the system's voices (Web Speech API; on Windows the voices installed in Windows) — every language.
 import { post } from './api.js';
 import { state, setState, toast } from './store.js';
 import { coachVoiceChanged } from './coachTerm.js';
+import { spokenText } from './coachSpeech.js';
 
 let ctx = null; // AudioContext for the natural voice
 let source = null; // the sound playing now
 let gen = 0; // every new utterance (or stop) ends the older playback loops
-let pending = null; // what the coach said before the page was allowed to play sound
-let blockedNoted = false;
 let fallbackNoted = false;
 
 // ---------------------------------------------------------------------------------------------
@@ -113,45 +113,7 @@ export function voiceEngine() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Text → speech-friendly text (the coach writes for the ear already; this catches what slips through)
-
-const PIECES = { K: 'king', Q: 'queen', R: 'rook', B: 'bishop', N: 'knight' };
-const SAN =
-  /(?<![\w-])(?:(O-O-O|O-O|0-0-0|0-0)|([KQRBN])([a-h])?([1-8])?(x)?([a-h][1-8])|([a-h])(?:(x)([a-h][1-8])|([1-8]))(?:=?([QRBN]))?)([+#])?(?:[!?]{1,2})?(?![\w-])/g;
-
-function sanWords(_m, castle, piece, file, rank, cap, to, pFile, pCap, pTo, pRank, promo, check) {
-  let w;
-  if (castle) w = castle.replace(/0/g, 'O') === 'O-O-O' ? 'castles queenside' : 'castles kingside';
-  else if (piece) w = `${PIECES[piece]}${file || rank ? ` from ${file || ''}${rank || ''}` : ''} ${cap ? 'takes' : 'to'} ${to}`;
-  else if (pCap) w = `${pFile} takes ${pTo}`;
-  else w = `${pFile}${pRank}`;
-  if (promo) w += `, promoting to a ${PIECES[promo]}`;
-  if (check) w += check === '#' ? ', checkmate' : ', check';
-  return w;
-}
-
-export function speechText(text) {
-  return String(text || '')
-    .replace(/```[\s\S]*?```/g, ' ') // code blocks, board diagrams
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // links: their text
-    .replace(/`([^`]*)`/g, '$1')
-    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
-    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, '')
-    .replace(/^\s*>\s?/gm, '')
-    .replace(/(\*\*|__|\*|_)(?=\S)([^*_\n]*?\S)\1/g, '$2')
-    .replace(/\|/g, ' ')
-    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '')
-    .replace(/(?<![\w.])\d{1,3}\s*\.{1,3}\s*(?=[KQRBNa-hO])/g, '') // move numbers
-    .replace(SAN, sanWords)
-    .replace(/(^|\s)#(\d+)\b/g, '$1mate in $2')
-    .replace(/(^|[\s(])([+-])(\d+(?:\.\d+)?)\b/g, (_m, a, sign, n) => `${a}${sign === '+' ? 'plus' : 'minus'} ${n}`)
-    .replace(/\s*(→|->)\s*/g, ' to ')
-    .replace(/[ \t]*\n+[ \t]*/g, '. ')
-    .replace(/([.!?])(\s*\.)+/g, '$1')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-}
+// A short text said at once (the voice test in Settings); the coach's texts are read by coachReading.js
 
 /** Speakable pieces: the first sentence alone (so the voice starts quickly), then up to ~220 characters each. */
 function chunks(text, max = 220) {
@@ -254,6 +216,7 @@ function playBrowser(parts, my) {
 
 const setSpeaking = on => state.coachSpeaking !== on && setState({ coachSpeaking: on });
 
+/** Stops whatever is being said: a reading (the coach's, the Book reader's) then pauses where it was. */
 export function stopSpeaking() {
   gen++;
   for (const [id, w] of waiting)
@@ -272,7 +235,6 @@ export function stopSpeaking() {
   } catch {
     /* no speech synthesis */
   }
-  pending = null;
   setSpeaking(false);
 }
 
@@ -280,7 +242,7 @@ export function stopSpeaking() {
 export async function say(text) {
   stopSpeaking();
   const my = gen;
-  const parts = chunks(speechText(text));
+  const parts = chunks(spokenText(text));
   if (!parts.length) return;
   setSpeaking(true);
   try {
@@ -302,10 +264,11 @@ export async function say(text) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Reading a book aloud (the Book reader): short parts one after the other — each ends with a move the board plays.
-// The natural voice makes the parts ahead of the one being read (the reader asks: prepareReading), in pieces of a
-// sentence or a clause, without the silence it puts around them: the reader's own pauses go between them. Reading stops
-// when stopSpeaking() is called (pausing, or the coach starting to talk); the parts made in advance are kept for it.
+// Reading aloud — a book (the Book reader: short parts one after the other, each ending with a move the board plays),
+// or what the coach says (coachReading.js: its sentences one after the other). The natural voice makes the parts ahead
+// of the one being read (the reader asks: prepareReading), in pieces of a sentence or a clause, without the silence it
+// puts around them: the reader's own pauses go between them. A reading stops when stopSpeaking() is called (pausing,
+// another reading starting); the parts made in advance are kept for it.
 
 const aborted = () => Object.assign(new Error('stopped'), { name: 'AbortError' });
 let utterance = null; // (kept: Chrome may forget an utterance it still speaks, and its end event with it)
@@ -321,7 +284,7 @@ export function warmReading(lang = 'en') {
   if (readingEngine(lang) === 'natural') voiceWorker().postMessage({ type: 'load' });
 }
 
-/** Starts a reading: the coach's voice stops; returns the reading, for readAloud. */
+/** Starts a reading: whatever was being said stops (another reading pauses); returns the reading, for readAloud. */
 export function startReading() {
   stopSpeaking();
   return gen;
@@ -331,13 +294,13 @@ const readingSpeed = speed => (state.settings?.voice?.rate || 1) * speed;
 
 /**
  * A part of a book in pieces for the natural voice, made one after the other: cut after a sentence or a clause, 220
- * characters at most — the first shorter, so that it comes soon (and the model reads 500 characters at most).
+ * characters at most — the first shorter (`first`), so that it comes soon (and the model reads 500 characters at most).
  */
-export function pieces(text) {
+export function pieces(text, first = 140) {
   const out = [];
   let rest = text.trim();
   while (rest) {
-    const max = out.length ? 220 : 140;
+    const max = out.length ? 220 : first;
     if (rest.length <= max) {
       out.push(rest);
       break;
@@ -446,33 +409,10 @@ function readingVoice(lang) {
   return browserVoices(lang, all)[0] || chosen || null;
 }
 
-/** The desktop window may play sound before the first click (its autoplay policy, see desktop/main.js). */
-const mayPlay = () => !!window.plymentor || !navigator.userActivation || navigator.userActivation.hasBeenActive;
-
-/** In the Book reader the book's voice reads: the coach does not talk there (its answers stay written in its panel). */
-const quietHere = () => /^#\/books(?:[/?]|$)/.test(globalThis.location?.hash || '');
-
-/** The coach's speak tool. */
-export function coachSays(ev) {
-  if (!state.settings?.voice?.enabled || !ev.text || quietHere()) return;
-  if (!mayPlay()) {
-    pending = { text: ev.text, at: Date.now() };
-    if (!blockedNoted) {
-      blockedNoted = true;
-      toast('Your coach is talking — click anywhere on the page to hear it.', 'info', 8000);
-    }
-    return;
-  }
-  say(ev.text);
-}
-
-/** Once per app start: play what the coach said before the first click (if it had to wait), and load the system's voice list. */
+/** Once per app start: sound may play after the first click (if it had to wait), and the system's voice list loads. */
 export function initVoice() {
   const unlock = () => {
     if (ctx?.state === 'suspended') ctx.resume().catch(() => {});
-    const p = pending;
-    pending = null;
-    if (p && Date.now() - p.at < 90_000 && state.settings?.voice?.enabled && !quietHere()) setTimeout(() => say(p.text), 0);
   };
   window.addEventListener('pointerdown', unlock, true);
   window.addEventListener('keydown', unlock, true);

@@ -35,6 +35,7 @@ export class ToolError extends Error {}
 
 const sideName = c => (c === 'white' ? 'White' : 'Black');
 const resolveFen = fen => (!fen || fen === 'startpos' ? INITIAL_FEN : fen);
+const SPEAK_MAX = 100_000; // (characters a speak call says: an hour and more of a voice)
 
 function safePos(fen) {
   try {
@@ -806,10 +807,11 @@ const executors = {
   async speak({ text }, ctx) {
     if (!getSettings().voice?.enabled)
       return 'The student has your voice switched off, so nothing was said out loud. Do not call speak again until the app tells you the voice is on.';
-    const say = text.trim().slice(0, 2000);
+    // (a whole reply, however long: the page reads it like a book — app/js/coachReading.js)
+    const say = text.trim().slice(0, SPEAK_MAX);
     if (!say) throw new ToolError('Nothing to say.');
-    ctx.emit({ type: 'ui', action: 'speak', id: crypto.randomUUID(), text: say }); // the open page plays it
-    return 'Said out loud in the app.';
+    ctx.emit({ type: 'ui', action: 'speak', id: crypto.randomUUID(), text: say }); // the open page reads it
+    return text.trim().length > SPEAK_MAX ? `Said out loud in the app — its first ${SPEAK_MAX.toLocaleString('en')} characters (a speak call takes no more).` : 'Said out loud in the app.';
   },
 };
 

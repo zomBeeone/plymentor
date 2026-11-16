@@ -215,7 +215,7 @@ function VoiceSettings({ st }) {
 
   return html`<div class="card">
     <h2>Coach voice</h2>
-    <p class="muted" style="margin-top:0">Your coach can talk to you in a natural, human-sounding voice while it coaches — it says each reply the way a coach next to you would. Switch it on or off any time with the 🔊 button in the coach panel.</p>
+    <p class="muted" style="margin-top:0">Your coach can talk to you in a natural, human-sounding voice while it coaches — it says each reply the way a coach next to you would, long ones too. Its text shows under the coach panel with the sentence being read marked: pause it, go back or on, change the speed, or click a sentence to listen from there. Switch the voice on or off any time with the 🔊 button in the coach panel.</p>
     <label class="check"><input type="checkbox" checked=${!!v.enabled} onChange=${ev => setVoiceEnabled(ev.currentTarget.checked)} /> Let my coach talk to me</label>
     <div class="provider-list" style="margin-top:10px">
       <label class=${cls('provider', v.engine === 'natural' && 'active')}>

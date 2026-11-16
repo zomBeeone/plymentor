@@ -23,6 +23,8 @@ test('moves as books write them', () => {
     findMoves('12.Nxe5+ 12...Bxf7# O-O-O exd5 Nbd7 e8=Q').map(m => m.words),
     ['12. knight takes e5, check', '12... bishop takes f7, checkmate', 'castles queenside', 'e takes d5', 'knight from b to d7', 'e8, promoting to a queen'],
   );
+  // (the file a on its own is the word "a" to a voice: said with its piece)
+  assert.deepEqual(findMoves('17.axb5 Rad1 Nab3 a4').map(m => m.words), ['17. a-pawn takes b5', 'a-rook to d1', 'a-knight to b3', 'a4']);
 });
 
 test('moves as some books and scans write them: X for a capture, castling with a space, m for mate, a number glued to the word before it, a scan’s cut numbers', () => {

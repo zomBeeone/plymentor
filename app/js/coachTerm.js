@@ -11,7 +11,8 @@ import { Terminal, FitAddon, WebLinksAddon } from '../vendor/xterm.js';
 import { post } from './api.js';
 import { setState, state, toast } from './store.js';
 import { navigate, parseHash } from './router.js';
-import { coachSays, stopSpeaking } from './voice.js';
+import { stopSpeaking } from './voice.js';
+import { coachSays, coachTurn } from './coachReading.js';
 import { engineSwitches, setEngineSwitch } from './engine.js';
 import { COACH_PROTOCOL, APP_VERSION } from '../../shared/protocol.js';
 import { CLI_TASKS } from '../../shared/prompts.js';
@@ -101,7 +102,10 @@ export function initCoach() {
     const b = term.buffer.active;
     if (b.viewportY >= b.baseY) follow = true;
   });
-  term.onData(d => send({ t: 'in', d }));
+  term.onData(d => {
+    if (d.includes('\r')) coachTurn(); // (the student sent the coach something: what it says next is read at once)
+    send({ t: 'in', d });
+  });
   term.attachCustomKeyEventHandler(e => {
     if (e.type === 'keydown' && e.shiftKey && e.key === 'PageUp') follow = false;
     if (e.type !== 'keydown' || !(e.ctrlKey || e.metaKey)) return true;
@@ -229,6 +233,7 @@ function onMessage(m) {
       return;
     case 'status':
       if (ws) ws.ready = true;
+      if (m.busy && !state.coachStatus?.busy) coachTurn(); // (the coach began working on something new)
       setStatus({ state: m.state, starting: m.starting, busy: m.busy, provider: m.provider, label: m.label, name: m.name, signIn: m.signIn, offerStart: m.offerStart, message: m.message });
       return;
     case 'settings':
@@ -377,6 +382,7 @@ export async function coachRequest({ task, taskArgs, text, ifIdle = false } = {}
   if (!line) return { sent: false };
   try {
     const r = await hostRequest('prompt', { line, ifIdle }, { timeout: 15_000 });
+    if (r.sent) coachTurn();
     if (!r.sent && !ifIdle) toast('The coach could not take the request right now.', 'error');
     return r;
   } catch (e) {
@@ -390,6 +396,7 @@ export async function startTraining() {
   const name = state.coachStatus?.name || 'your coach';
   try {
     const r = await hostRequest('start-training', {}, { timeout: 20_000 });
+    if (r.sent) coachTurn();
     if (!r.sent) toast(r.reason === 'sign-in' ? `Sign in to ${name} in the terminal first — it opens your browser for it.` : 'The coach could not take the request right now.', 'error', 6000);
   } catch (e) {
     toast(e.message, 'error');

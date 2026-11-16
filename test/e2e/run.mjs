@@ -354,6 +354,40 @@ async function main() {
     await page.waitFor(`document.querySelector('.engine .switch.on') && /depth [1-9]/.test(document.querySelector('.engine')?.innerText || '')`, { timeout: 30000, what: 'Stockfish on again' });
   });
 
+  await step('the coach’s voice: a long lesson said whole and read like a book — its moves in words, the sentence being read marked; paused, read from a sentence clicked, to its end, a sentence back', async () => {
+    // a stand-in for the system voice: nothing is said out loud, every sentence "takes" 150 ms
+    await page.eval(`(() => { window.ccSaid = []; speechSynthesis.speak = u => { window.ccSaid.push(u.text); window.ccNow = u; setTimeout(() => window.ccNow === u && u.onend?.(), 150); }; speechSynthesis.cancel = () => { const u = window.ccNow; window.ccNow = null; if (u) setTimeout(() => u.onerror?.(), 0); }; return true; })()`);
+    const said = 'window.ccSaid';
+    await page.click('.term-coach .voice-toggle');
+    await page.waitFor(`document.querySelector('.term-coach .voice-toggle')?.getAttribute('aria-pressed') === 'true'`, { what: 'the coach’s voice on' });
+    // (the app tells the coach: typed into its terminal a moment later — not into the middle of the request below)
+    await page.waitFor(`/> \\[App\\] I switched your voice on/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 15000, what: 'the coach told of its voice' });
+    await ask(page, 'Please read me a long lesson');
+    await page.waitFor(`/lesson said: Said out loud in the app\\./.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 20000, what: 'the lesson said whole (800 words)' });
+    await page.waitFor(`document.querySelectorAll('.coach-voice [data-s]').length === 43`, { what: 'the whole lesson under the coach’s terminal' });
+    await page.waitFor(`${said}.includes('After 1. e4, c5, 2. knight to f3, d6, 3. d4, c takes d4, 4. knight takes d4, knight to f6, 5. knight to c3, a6, Black keeps every option open.')`, { what: 'its moves said in words' });
+    await page.waitFor(`Number(document.querySelector('.coach-voice .cv-cur')?.dataset.s) >= 3`, { what: 'the sentence being read marked, and moving on' });
+    // paused: nothing more is said
+    await page.click('.coach-voice .cv-play', 'Pause');
+    await sleep(400);
+    const n = await page.eval(`${said}.length`);
+    await sleep(600);
+    assert((await page.eval(`${said}.length`)) === n && (await page.eval(`document.querySelector('.coach-voice .cv-play').innerText`)).includes('Continue'), 'the reading paused');
+    // a sentence clicked: read from there, on to the end
+    await page.click('.coach-voice [data-s="40"]');
+    await page.waitFor(`${said}.at(-1)?.startsWith('Remember the plan with a-pawn takes b5 and a-rook to d1')`, { timeout: 15000, what: 'the reading from the sentence clicked to the end' });
+    const fromClick = await page.eval(`${said}.slice(${n})`);
+    assert(fromClick[0] === 'Point 39: the knight on d5 is strong, and 14... knight to d7, 15. f4, e takes f4, 16. bishop takes f4, gives White the attack.' && fromClick.length === 3, JSON.stringify(fromClick));
+    await page.waitFor(`document.querySelector('.coach-voice .cv-play')?.innerText.includes('Listen')`, { what: 'the end of the lesson' });
+    // a sentence back, and on again from there
+    await page.click('.coach-voice .cv-bar button', '⏮');
+    await page.click('.coach-voice .cv-play', 'Continue');
+    await page.waitFor(`${said}.length === ${n + 4} && ${said}.at(-1).startsWith('Remember the plan')`, { what: 'the last sentence again' });
+    // the voice off: the text goes from the panel
+    await page.click('.term-coach .voice-toggle');
+    await page.waitFor(`!document.querySelector('.coach-voice')`, { what: 'no text with the voice off' });
+  });
+
   await step('the board: a PGN’s comments — marks in the move list, the move’s comment under it, its arrows; the evaluation bar: all White’s at a checkmate, none with Stockfish off', async () => {
     const pgn = `[Event "Comments"]\n\n{A short game} 1. e4 e5 2. Bc4 {Aiming at f7 [%cal Gc4f7]} Nc6 3. Qh5 {The queen joins the attack} Nf6 $4 {A blunder} (3... g6 {Defends}) 4. Qxf7# 1-0`;
     await page.click('.side-col.middle .tab', 'Moves');

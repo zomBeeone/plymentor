@@ -200,6 +200,18 @@ async function handle(text) {
     say(`Books done: ${failed.length ? failed.join(', ') : 'all ok'}.`);
     return;
   }
+  if (/read me a long lesson/i.test(text)) {
+    // a whole lesson said out loud (far more than the 80 words a reply was once said in), its moves in notation
+    const lesson = [
+      '## The Najdorf in one lesson',
+      'After 1. e4 c5 2. Nf3 d6 3. d4 cxd4 4. Nxd4 Nf6 5. Nc3 a6 Black keeps every option open.',
+      ...Array.from({ length: 40 }, (_, i) => `Point ${i + 1}: the knight on d5 is strong, and 14...Nd7 15. f4 exf4 16. Bxf4 gives White the attack.`),
+      'Remember the plan with axb5 and Rad1, and that e8=Q+ ends it.',
+    ].join('\n\n');
+    const r = await call('speak', { text: lesson });
+    say(`lesson said: ${r.isError ? `ERROR ${r.text.slice(0, 60)}` : r.text}`);
+    return;
+  }
   if (/show the long line/i.test(text)) {
     const moves = 'e4 c5 Nf3 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6 Be3 e5 Nb3 Be6 f3 Be7 Qd2 O-O O-O-O Nbd7 g4 b5 g5 b4'.split(' ');
     const r = await call('set_board', { moves_from_start: moves });
