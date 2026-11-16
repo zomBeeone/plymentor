@@ -393,6 +393,8 @@ async function main() {
     const termHas = re => `${re}.test(document.querySelector('.xterm-rows')?.innerText || '')`;
     await page.click('button', 'New');
     await page.waitFor(`[...document.querySelectorAll('.board-area cg-board piece')].some(p => p.cgKey === 'e2')`, { what: 'the new board' });
+    // (a new board has a coach panel of its own: the terminal moves into it)
+    await page.waitFor(`[...document.querySelectorAll('.xterm-helper-textarea')].some(t => t.offsetParent)`, { what: 'the coach panel of the new board' });
     await ask(page, 'Where is my game now?');
     await page.waitFor(termHas('/game seen: /'), { timeout: 15000, what: 'the coach looking at the board' });
     for (const sq of ['e2', 'e4', 'e7', 'e5']) await page.clickSquare('.board-area .cg-wrap', sq);
