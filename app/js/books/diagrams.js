@@ -1100,6 +1100,38 @@ export function readBoards(boards, { examples = [], labels = [] } = {}) {
     }
     fills[t] = best.cut;
   }
+  // (a white piece whose outline the hatching of its dark square broke comes out as that outline — the square's
+  // background ran into it —: less than a whole piece, its core all ink, a black piece's fill. Where the book's own
+  // white pieces of a kind on dark squares come out so — a quarter of them at least with a black one's fill —, a dark
+  // square's piece read black that is much smaller than the book's black ones of its kind there (0.7 of their middle
+  // area) and plainly more like its white ones than its black ones — the mean of the three likest of each, by 0.25 — is
+  // White's: Simple Chess's white knights on hatched squares were Black's, and a third black knight made a board's
+  // other one a bishop)
+  const onDark = { true: {}, false: {} };
+  for (const e of known) if (e.dark && e.white !== undefined && e.area !== undefined) (onDark[e.white][e.type] ||= []).push(e);
+  const likest3 = (v, list, board) => {
+    const l = list.filter(e => e.board === undefined || e.board !== board).map(e => dot(v, (e.unit ||= unit(e.silhouette)))).sort((a, b) => b - a);
+    return l.length >= 3 ? (l[0] + l[1] + l[2]) / 3 : null;
+  };
+  const hollow = {};
+  for (const t of TYPES) {
+    const w = onDark.true[t] || [];
+    const k = onDark.false[t] || [];
+    if (w.length >= 3 && k.length >= 3 && w.filter(e => e.fill >= fills[t]).length >= w.length / 4) hollow[t] = median(k.map(e => e.area)) * 0.7;
+  }
+  boards.forEach((b, i) => {
+    for (const cell of b.cells.flat()) {
+      cell.whiteAs = null;
+      if (!cell.darkSquare || !cell.scores || cell.mark) continue;
+      for (const t of TYPES) {
+        if (!hollow[t] || cell.shape.fill < fills[t] || cell.shape.area >= hollow[t]) continue;
+        const v = unit(cell.shape.silhouette);
+        const w = likest3(v, onDark.true[t], i);
+        const k = likest3(v, onDark.false[t], i);
+        if (w !== null && k !== null && w > k + 0.25) (cell.whiteAs ||= new Set()).add(t);
+      }
+    }
+  });
   // (a shape as large and tall as the book's pieces is one, however unlike the examples it is: a book's king in a
   // font unlike the app's)
   const big = median(all.filter(c => c.scores).map(c => c.shape.area)) * 0.9;
@@ -1169,7 +1201,7 @@ function placePieces(b, fills, big = Infinity) {
       choice.push({ r, c, ranked, cell });
     }),
   );
-  const colour = x => x.cell.shape.fill < fills[x.ranked[0]];
+  const colour = x => !!x.cell.whiteAs?.has(x.ranked[0]) || x.cell.shape.fill < fills[x.ranked[0]];
   for (const x of choice) x.white = colour(x);
   // at most one king a side: of the pieces of a colour about as like a king as like anything else, the most like one
   // (one on a light square first, its colour sure)

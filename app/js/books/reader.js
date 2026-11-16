@@ -205,12 +205,14 @@ const BOARDS = 2;
 // coordinates are no text, and a board on a page in one column goes before the first line under it, however short.
 const SCANS = 1;
 // The version of how a book's boards are read (diagrams.js readBoards): when it changes, the boards kept from before —
-// a scanned PDF's, an EPUB's pictures' — are read again (not looked for again). 5 since a cross drawn on a square is a
-// mark, no piece — nor a known position's piece there teaching one —, and a board with no king gets one only from a
+// a scanned PDF's, an EPUB's pictures' — are read again (not looked for again). 6 since a white piece whose outline the
+// hatching broke — its core all ink, much smaller than a black piece — is White's where the book's own white pieces of
+// its kind on dark squares come out so (Simple Chess's white knights were Black's); 5 since a cross drawn on a square is
+// a mark, no piece — nor a known position's piece there teaching one —, and a board with no king gets one only from a
 // piece about as like a king as like what it is (a diagram of key squares, of pawns alone); 4 since a known position's
 // squares that plainly show another piece teach nothing (3: four of the app's piece sets to start from, the book's
 // known positions teaching its pieces).
-const READING = 5;
+const READING = 6;
 
 // How a PDF's pages were scanned, as its cache keeps it (see scanAgain).
 export const SCANNED = { boards: BOARDS, scans: SCANS };

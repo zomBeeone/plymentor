@@ -518,6 +518,31 @@ test('a known position of another moment of its game teaches nothing where its p
   assert.equal(placement(read[5]), '4k3/8/8/8/8/8/1P6/4K3');
 });
 
+/** A silhouette's edge, `w` of its squares wide: a white piece the hatching ran into, only its outline left. */
+const outlineOf = (s, w = 2) =>
+  s.map((v, i) => {
+    if (v < 0.5) return 0;
+    const [x, y] = [i % CELL, Math.floor(i / CELL)];
+    for (let dy = -w; dy <= w; dy++)
+      for (let dx = -w; dx <= w; dx++) {
+        const [nx, ny] = [x + dx, y + dy];
+        if (nx < 0 || ny < 0 || nx >= CELL || ny >= CELL || s[ny * CELL + nx] < 0.5) return 1;
+      }
+    return 0;
+  });
+
+test('a white piece the hatching ran into — its outline left, its core all ink — is White’s when the book’s white ones of its kind on dark squares look so', () => {
+  // the book's white knights on its hatched squares come out as their outlines, as much ink inside as its black ones
+  // (solid): three known positions show both; on a board not known, a white knight so on d2 and two black knights
+  // (by its fill, a third black one: the MOST rule would make one of them another piece)
+  const ring = outlineOf(PIECES.n);
+  const fens = ['4k3/8/5n2/8/8/2N5/8/4K3', '4k3/8/8/4n3/1N6/8/8/4K3', '4k3/8/2n2n2/8/8/6N1/8/4K3'];
+  const hollow = { 0: ['c3'], 1: ['b4'], 2: ['g3'] };
+  const boards = [...fens.map((f, i) => squaresOf(f, { white: { n: 0.95 }, shapes: Object.fromEntries(hollow[i].map(sq => [sq, ring])) })), squaresOf('4k3/3n4/5n2/8/8/8/3N4/4K3', { white: { n: 0.95 }, shapes: { d2: ring } })];
+  readBoards(boards, { examples: pieceSquares(64).map(p => pieceExample(p.type, p.img)), labels: [...fens, null] });
+  assert.equal(placement(boards[3]), '4k3/3n4/5n2/8/8/8/3N4/4K3');
+});
+
 test('OCR: ¢ for e (or c), € for e — the board plays the reading that is legal', () => {
   const book = new BookMoves();
   const text = 'White has just played 2.e6.\n\n2...fx¢6 3.Kd1 €5';
