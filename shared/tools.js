@@ -32,7 +32,7 @@ export const TOOL_DEFS = [
     name: 'get_board_state',
     readOnly: true,
     description:
-      "What the student sees in the app right now: the active screen, the loaded game, the moves played, the current position (FEN, ASCII board, pieces), whether their live Stockfish analysis is on (with its lines when it is) and the judgement of the last move. Call it before talking about \"this position\" or \"my move\" — the student may have moved since you last looked.",
+      "What the student sees in the app right now: the active screen, the loaded game, the moves played, the current position (FEN, ASCII board, pieces), whether their live Stockfish analysis is on (with its lines when it is) and the judgement of the last move. Call it before talking about \"this position\" or \"my move\" — the student may have moved since you last looked; its answer then begins with what changed (the moves played since, a step back, another line). The position it gives is the one to talk about, never one you saw earlier.",
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {

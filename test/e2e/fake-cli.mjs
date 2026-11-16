@@ -200,6 +200,17 @@ async function handle(text) {
     say(`Books done: ${failed.length ? failed.join(', ') : 'all ok'}.`);
     return;
   }
+  if (/where is my game now/i.test(text)) {
+    // what the coach is told about the board having changed since it last looked (short lines: the terminal wraps)
+    const first = (await call('get_board_state', {})).text.split('\n')[0];
+    say(`game seen: ${/^Since you last looked at the board, 2 more moves were played: 1\. e4 e5\. /.test(first) ? 'two moves on' : /^Since you last looked/.test(first) ? first.slice(36, 90) : 'looked'}`);
+    return;
+  }
+  if (/analyse the position please/i.test(text)) {
+    const a = await call('analyze_position', { fen: 'startpos', depth: 10, multipv: 1 });
+    say(`stale note: ${a.isError ? `ERROR ${a.text.slice(0, 50)}` : /The student's board has changed since you last looked at it: it is now at the position after 2\. Nf3\. /.test(a.text) ? 'yes' : 'no'}`);
+    return;
+  }
   if (/read me a long lesson/i.test(text)) {
     // a whole lesson said out loud (far more than the 80 words a reply was once said in), its moves in notation
     const lesson = [

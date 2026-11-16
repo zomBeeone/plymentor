@@ -383,9 +383,25 @@ async function main() {
     await page.click('.coach-voice .cv-bar button', '⏮');
     await page.click('.coach-voice .cv-play', 'Continue');
     await page.waitFor(`${said}.length === ${n + 4} && ${said}.at(-1).startsWith('Remember the plan')`, { what: 'the last sentence again' });
-    // the voice off: the text goes from the panel
+    // the voice off: the text goes from the panel (and the coach is told, before anything else is typed to it)
     await page.click('.term-coach .voice-toggle');
     await page.waitFor(`!document.querySelector('.coach-voice')`, { what: 'no text with the voice off' });
+    await page.waitFor(`/> \\[App\\] I switched your voice off/.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 15000, what: 'the coach told its voice is off' });
+  });
+
+  await step('the coach is told what changed on the board since it last looked: the moves played since, and a word in a chess tool’s answer', async () => {
+    const termHas = re => `${re}.test(document.querySelector('.xterm-rows')?.innerText || '')`;
+    await page.click('button', 'New');
+    await page.waitFor(`[...document.querySelectorAll('.board-area cg-board piece')].some(p => p.cgKey === 'e2')`, { what: 'the new board' });
+    await ask(page, 'Where is my game now?');
+    await page.waitFor(termHas('/game seen: /'), { timeout: 15000, what: 'the coach looking at the board' });
+    for (const sq of ['e2', 'e4', 'e7', 'e5']) await page.clickSquare('.board-area .cg-wrap', sq);
+    await ask(page, 'Where is my game now?');
+    await page.waitFor(termHas('/game seen: two moves on/'), { timeout: 15000, what: 'the coach told the two moves played since it looked' });
+    await page.clickSquare('.board-area .cg-wrap', 'g1');
+    await page.clickSquare('.board-area .cg-wrap', 'f3');
+    await ask(page, 'Analyse the position please');
+    await page.waitFor(termHas('/stale note: yes/'), { timeout: 30000, what: 'a chess tool’s answer saying the board has changed since' });
   });
 
   await step('the board: a PGN’s comments — marks in the move list, the move’s comment under it, its arrows; the evaluation bar: all White’s at a checkmate, none with Stockfish off', async () => {

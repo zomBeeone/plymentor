@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
-import { request } from 'node:http';
+import { request, createServer } from 'node:http';
 import { EventEmitter } from 'node:events';
 import { ROOT } from './setup.mjs';
 import { COACH_PROTOCOL } from '../../shared/protocol.js';
@@ -386,6 +386,37 @@ test('another model: Claude Code in a folder of its own, sent to the student’s
     delete process.env.ANTHROPIC_BASE_URL;
     delete process.env.ANTHROPIC_API_KEY;
   }
+});
+
+test('a coach on Ollama: a model run with too short a context is told to the student; other servers are asked nothing', async () => {
+  // a stand-in for Ollama's /api/ps (the models it runs, each with the context it gave it)
+  let models = [];
+  const ollama = createServer((req, res) => {
+    if (req.url !== '/api/ps') return res.writeHead(404).end();
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ models }));
+  });
+  await new Promise(r => ollama.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${ollama.address().port}`;
+  try {
+    models = [{ name: 'qwen3:8b', model: 'qwen3:8b', context_length: 4096 }];
+    assert.match(await terminal.contextNotice(base), /qwen3:8b\) with a context of only 4,096 tokens .* 64k or more .*OLLAMA_CONTEXT_LENGTH=64000/);
+    assert.match(await terminal.contextNotice(`${base}/v1/`), /4,096 tokens/, 'an address with a path: the server is asked');
+    models = [{ name: 'qwen3:8b', context_length: 65536 }];
+    assert.equal(await terminal.contextNotice(base), null, 'context enough');
+    models = [];
+    assert.equal(await terminal.contextNotice(base), null, 'no model loaded');
+    assert.equal(await terminal.contextNotice(`http://127.0.0.1:1/`, { timeout: 500 }), null, 'no server');
+  } finally {
+    ollama.close();
+  }
+  // a provider's server (not Ollama's port, not this computer): nothing asked
+  const asked = [];
+  const get = url => (asked.push(String(url)), Promise.reject(new Error('asked')));
+  assert.equal(await terminal.contextNotice('https://api.example.com/anthropic', { get }), null);
+  assert.equal(await terminal.contextNotice('not a url', { get }), null);
+  assert.deepEqual(asked, []);
+  await terminal.contextNotice('http://192.168.1.20:11434', { get });
+  assert.deepEqual(asked, ['http://192.168.1.20:11434/api/ps'], "Ollama's port on another computer is asked");
 });
 
 test('each coach starts with the plymentor MCP server and only its tools', () => {

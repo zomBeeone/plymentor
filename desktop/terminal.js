@@ -49,6 +49,37 @@ const FIRST_PROMPT_FALLBACK = 30_000; // type the first prompt even if the coach
 const SIGN_IN_CHECK = 3000; // while the student signs in (the first time), how often the app asks the CLI
 const OFFER_START_AFTER = 12_000; // "Start training with …" when the coach has not started working by then
 
+// Ollama runs a model with a short context unless told otherwise (4k tokens on graphics cards with less than 24 GB):
+// less than what Claude Code sends before a word of the conversation (its instructions and the coach's tools), so the
+// model silently loses its instructions, the student's board and what was said — a coach that "forgets" where the game
+// is and mixes old positions with new ones. Once the coach has worked (its model is loaded then), the session asks the
+// Ollama server Claude Code talks to (another model's, or the student's own ANTHROPIC_BASE_URL) what context it gave
+// the model, and tells the student when it is too short. (Ollama asks for 64k for agents and coding tools.)
+const MIN_CONTEXT = 32_000;
+
+/** A notice for the student when the Ollama server at `base` runs a model with too short a context, else null. */
+export async function contextNotice(base, { get = fetch, timeout = 3000 } = {}) {
+  let url;
+  try {
+    url = new URL('/api/ps', String(base));
+  } catch {
+    return null;
+  }
+  // (only an Ollama server — its port, or a server on this computer: no other provider is asked anything)
+  if (url.port !== '11434' && !/^(localhost|127(\.\d{1,3}){3}|\[::1\])$/.test(url.hostname)) return null;
+  try {
+    const res = await get(url, { signal: AbortSignal.timeout(timeout) });
+    if (!res.ok) return null;
+    const { models } = await res.json();
+    const short = (Array.isArray(models) ? models : []).find(m => Number(m?.context_length) > 0 && Number(m.context_length) < MIN_CONTEXT);
+    if (!short) return null;
+    const name = stripHidden(String(short.name || short.model || 'your model')).slice(0, 60);
+    return `Ollama runs your coach's model (${name}) with a context of only ${Number(short.context_length).toLocaleString('en')} tokens — too short for a coach: it loses its instructions, your board and what you said. Give it 64k or more (Ollama's settings → Context length, or OLLAMA_CONTEXT_LENGTH=64000 when you start "ollama serve"), then restart the coach.`;
+  } catch {
+    return null;
+  }
+}
+
 /** On Windows the CLI runs in ConPTY, which redraws the screen itself on resize: terminals must not reflow. */
 export const WINDOWS_PTY = process.platform === 'win32' ? { backend: 'conpty', buildNumber: Number(release().split('.')[2]) || 0 } : undefined;
 
@@ -101,6 +132,8 @@ export class CoachSession {
     this.profile = {};
     this.language = 'English';
     this.token = null; // the MCP bridge's secret for the running session
+    this.modelServer = null; // the model server Claude Code talks to (ANTHROPIC_BASE_URL), when it is not Anthropic's
+    this.contextChecked = false; // (whether that server gave its model context enough: once a session)
   }
 
   status() {
@@ -218,6 +251,9 @@ export class CoachSession {
       return this.setState('error', `Could not prepare ${PROVIDERS[provider].label}: ${e.message}`);
     }
     if (!cmd) return this.setState('missing', `${PROVIDERS[provider].label} is not installed yet.`);
+    const viaClaude = provider === 'claude-code' || PROVIDERS[provider].via === 'claude-code';
+    this.modelServer = (viaClaude && Object.entries(cmd.env || {}).find(([k]) => k.toUpperCase() === 'ANTHROPIC_BASE_URL')?.[1]) || null;
+    this.contextChecked = false;
     const gen = ++this.generation;
     const mirror = new Terminal({ cols: this.cols, rows: this.rows, scrollback: SCROLLBACK, allowProposedApi: true, windowsPty: WINDOWS_PTY });
     const serializer = new SerializeAddon();
@@ -436,10 +472,23 @@ export class CoachSession {
         if (busy !== this.busy) {
           this.busy = busy;
           this.broadcast(this.status());
+          if (!busy) this.checkContext(); // (the coach has worked: its model is loaded)
         }
         if ((this.provider === 'claude-code' || PROVIDERS[this.provider]?.via === 'claude-code') && this.trustKeys < 8) this.answerTrust(screen);
       });
     }, 250);
+  }
+
+  /** Once a session, after the coach has worked: whether its Ollama server gave the model context enough (contextNotice). */
+  checkContext() {
+    if (this.contextChecked || !this.modelServer) return;
+    this.contextChecked = true;
+    const gen = this.generation;
+    contextNotice(this.modelServer).then(message => {
+      if (!message || gen !== this.generation) return;
+      this.log(`model server: ${message}`);
+      this.broadcast({ t: 'notice', message });
+    });
   }
 
   /** Moves the menu cursor to "Yes, I trust this folder" and confirms (each key press redraws, which re-runs this). */

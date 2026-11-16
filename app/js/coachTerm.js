@@ -18,6 +18,7 @@ import { COACH_PROTOCOL, APP_VERSION } from '../../shared/protocol.js';
 import { CLI_TASKS } from '../../shared/prompts.js';
 import { SCREENS, ENGINE_LABELS, BOOK_TOOLS } from '../../shared/tools.js';
 import { bookTool } from './books/coach.js';
+import { INITIAL_FEN, tryPos, fenOf, moveFromUci, makeSan, formatSanLine } from './chess.js';
 
 const THEME = {
   background: '#161512',
@@ -234,6 +235,7 @@ function onMessage(m) {
     case 'status':
       if (ws) ws.ready = true;
       if (m.busy && !state.coachStatus?.busy) coachTurn(); // (the coach began working on something new)
+      if (m.state !== 'running') forgetLooks();
       setStatus({ state: m.state, starting: m.starting, busy: m.busy, provider: m.provider, label: m.label, name: m.name, signIn: m.signIn, offerStart: m.offerStart, message: m.message });
       return;
     case 'settings':
@@ -248,6 +250,10 @@ function onMessage(m) {
       return;
     case 'reset':
       term.reset();
+      forgetLooks(); // (a new session)
+      return;
+    case 'notice':
+      toast(m.message, 'error', 25_000);
       return;
     case 'tool':
       runTool(m);
@@ -313,10 +319,99 @@ async function execTool({ id, name, arguments: args }) {
     result = BOOK_TOOLS.has(name) ? await bookTool(name, body.arguments) : await post(`/api/agent/tools/${encodeURIComponent(String(name))}`, body);
     if (name === 'switch_screen' && !result?.isError) await screenShown(SCREENS[body.arguments.screen]?.view, body.arguments.tab);
     if (name === 'start_training_game' && !result?.isError) await screenShown('analysis', null, 'play'); // (the coach looks at the game next)
+    try {
+      result = withBoardChanges(name, body, result);
+    } catch (e) {
+      console.warn('what changed on the board could not be told:', e); // (the tool's answer goes as it was)
+    }
   } catch (e) {
     result = { content: `The Plymentor app could not run this tool: ${e.message}`, isError: true };
   }
   send({ t: 'tool-result', id, content: String(result?.content ?? ''), isError: !!result?.isError });
+}
+
+// ---------------------------------------------------------------------------------------------
+// What changed on the board since the coach last looked
+//
+// A coach easily goes on with the position it saw last while the student has played on — a weaker model above all, or
+// one whose context is too short for the conversation (Ollama's default: desktop/terminal.js contextNotice), which then
+// mixes the old position with the new. So get_board_state begins with what changed since the coach last looked, and a
+// chess tool's answer ends with a word when the student's board is no longer where the coach last saw it.
+
+const POSITION_TOOLS = new Set(['analyze_position', 'evaluate_move', 'play_moves', 'get_position_features', 'opening_info', 'database_explorer']);
+const BOARD_CHANGING = new Set(['set_board', 'make_move', 'open_game', 'start_training_game', 'switch_screen']);
+let looked = null; // the line on the student's board when the coach last looked at it: { mode, start, ucis }
+let warned = null; // (the line a tool's answer last said the board had gone to: said once)
+
+/** The line on a screen's board — its moves from the first position —, or null (no line on that screen). */
+function lineOf(screen) {
+  const c = screen?.context;
+  return Array.isArray(c?.ucis) ? { mode: c.mode || screen.view, start: c.startFen || INITIAL_FEN, ucis: c.ucis } : null;
+}
+
+const sameLine = (a, b) => !!a && !!b && a.mode === b.mode && a.start === b.start && a.ucis.length === b.ucis.length && a.ucis.every((u, i) => u === b.ucis[i]);
+
+/** A line's moves from its `from`-th to its `to`-th, with their numbers ("12. Rfd1 Ne8"), or ''. */
+function movesOf(line, from, to = line.ucis.length) {
+  const pos = tryPos(line.start);
+  if (!pos || from >= to) return '';
+  let fen = '';
+  const sans = [];
+  for (let i = 0; i < to; i++) {
+    if (i === from) fen = fenOf(pos);
+    const m = moveFromUci(pos, line.ucis[i]);
+    if (!m) return '';
+    if (i >= from) sans.push(makeSan(pos, m));
+    pos.play(m);
+  }
+  return formatSanLine(fen, sans);
+}
+
+/** The position after a line's `k`-th move, in words. */
+const after = (line, k) => (k ? `the position after ${movesOf(line, k - 1, k)}` : 'the first position');
+/** A line's moves from its `k`-th on — the last 16 at most. */
+function movesFrom(line, k) {
+  const from = Math.max(k, line.ucis.length - 16);
+  return `${from > k ? '… ' : ''}${movesOf(line, from)}`;
+}
+
+/** What changed from the line `was` (the board when the coach last looked) to `now`, said to the coach — or ''. */
+export function boardChange(was, now) {
+  if (!was || !now || sameLine(was, now)) return '';
+  const head = 'Since you last looked at the board';
+  if (was.mode !== now.mode || was.start !== now.start) return `${head}, another game or position has come on it. What follows is the board now.`;
+  let k = 0;
+  while (k < was.ucis.length && k < now.ucis.length && was.ucis[k] === now.ucis[k]) k++;
+  const n = Math.abs(now.ucis.length - was.ucis.length);
+  const s = n === 1 ? '' : 's';
+  if (k === was.ucis.length) return `${head}, ${n} more move${s} ${n === 1 ? 'was' : 'were'} played: ${movesFrom(now, k)}. What follows is the board now — not the position you saw before.`;
+  if (k === now.ucis.length) return `${head}, it went back ${n} move${s}, to ${after(now, k)}. What follows is the board now.`;
+  return `${head}, it went into another line: from ${after(now, k)} it now goes ${movesFrom(now, k)} (when you looked: ${movesFrom(was, k)}). What follows is the board now.`;
+}
+
+/** A tool's answer, with what the coach should know about the board having changed (see above). */
+function withBoardChanges(name, body, result) {
+  if (result?.isError) return result;
+  if (name === 'get_board_state') {
+    const now = lineOf(body.screen);
+    const change = boardChange(looked, now);
+    looked = now;
+    warned = null;
+    return change ? { ...result, content: `${change}\n\n${result.content}` } : result;
+  }
+  // (the coach changed the board itself: nothing to tell it until it looks again)
+  if (BOARD_CHANGING.has(name)) looked = warned = null;
+  if (!POSITION_TOOLS.has(name) || !looked) return result;
+  const now = lineOf(currentScreen());
+  if (!now || sameLine(looked, now) || sameLine(warned, now)) return result;
+  warned = now;
+  const where = now.mode !== looked.mode || now.start !== looked.start ? 'another game or position is on it now' : now.ucis.length ? `it is now at ${after(now, now.ucis.length)}` : 'it is now at its first position';
+  return { ...result, content: `${result.content}\n\n(The student's board has changed since you last looked at it: ${where}. Look at it again with get_board_state before you comment on their position.)` };
+}
+
+/** A new coach session has looked at nothing yet. */
+function forgetLooks() {
+  looked = warned = null;
 }
 
 // ---------------------------------------------------------------------------------------------
