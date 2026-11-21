@@ -195,21 +195,17 @@ export async function openDatabase({ userId, memory = false, wasmUrl } = {}) {
 
 /**
  * Version 2 (2026-11-21, the owner: "move comments for the openings are group based, not universal"): a repertoire
- * move's note belongs to the group it is in. Before, a move had one note whatever its groups — the first PGN's, shown
- * in every group with the move. A move in one group gives its note to that group; a move in several (1. e4 of both the
- * French and the Caro-Kann) keeps its note outside them, as its note in no group: whose it was cannot be known, and in
- * the other groups it was another's — importing a group's PGN again gives the group its own notes (a note is set where
- * there is none).
+ * move's note belongs to the group it is in. Before, a move had one note whatever its groups, shown in every group
+ * with the move. At the update every group with the move takes that note — 1. e4 of both the French and the Caro-Kann
+ * shows it in both, as before (the owner: "for a move several groups share it should show on everyone for the update.
+ * after the update every group should be individual") —, and the move keeps it as its note outside the groups (the
+ * lines in no group it leads to). From then on each group's notes are its own.
  */
 export function migrateGroupNotes() {
   tx(() => {
     if (!all('PRAGMA table_info(repertoire_group_moves)').some(c => c.name === 'comment')) db.exec('ALTER TABLE repertoire_group_moves ADD COLUMN comment TEXT');
-    // (no temp table: the OPFS pool has a few file handles only; run again, it changes nothing)
-    const single = 'SELECT move_id FROM repertoire_group_moves GROUP BY move_id HAVING COUNT(*) = 1';
-    db.exec(`UPDATE repertoire_group_moves SET comment = (SELECT r.comment FROM repertoire r WHERE r.id = repertoire_group_moves.move_id)
-        WHERE move_id IN (${single}) AND (comment IS NULL OR comment = '');
-      UPDATE repertoire SET comment = NULL
-        WHERE id IN (${single}) AND comment = (SELECT m.comment FROM repertoire_group_moves m WHERE m.move_id = repertoire.id);`);
+    // (run again, it changes nothing)
+    db.exec(`UPDATE repertoire_group_moves SET comment = (SELECT r.comment FROM repertoire r WHERE r.id = repertoire_group_moves.move_id) WHERE comment IS NULL OR comment = ''`);
   });
 }
 

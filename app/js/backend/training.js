@@ -90,8 +90,8 @@ function pruneUnreachable(color) {
 
 // A move's note belongs to the group it is in: each group has its own (repertoire_group_moves.comment), and
 // repertoire.comment is the move's note outside the groups, for the lines in no group. A move that goes into its first
-// group takes its note along; one that leaves its last group (taken out, its group deleted keeping its lines) takes the
-// group's note back when it has none of its own.
+// group brings its note into it (and keeps it outside, for the lines in no group it may lead to); one that leaves its
+// last group (taken out, its group deleted keeping its lines) takes the group's note back when it has none of its own.
 
 /** Sets the note of a move in a group (`groupId`), or outside the groups (null), when it has none there. */
 function noteWhereNone(moveId, groupId, note) {
@@ -102,15 +102,13 @@ function noteWhereNone(moveId, groupId, note) {
 
 const inAnyGroup = moveId => !!get('SELECT 1 AS one FROM repertoire_group_moves WHERE move_id = ? LIMIT 1', moveId);
 
-/** Moves into a group; a move in no group until now brings its note into it. */
+/** Moves into a group; a move in no group until now brings its note into it (another group's notes stay its own). */
 function joinGroup(groupId, moveIds) {
   for (const id of moveIds) {
     const first = !inAnyGroup(id);
     if (!run('INSERT OR IGNORE INTO repertoire_group_moves (group_id, move_id) VALUES (?, ?)', groupId, id).changes || !first) continue;
     const note = get('SELECT comment FROM repertoire WHERE id = ?', id)?.comment;
-    if (!note) continue;
-    run('UPDATE repertoire_group_moves SET comment = ? WHERE group_id = ? AND move_id = ?', note, groupId, id);
-    run('UPDATE repertoire SET comment = NULL WHERE id = ?', id);
+    if (note) run('UPDATE repertoire_group_moves SET comment = ? WHERE group_id = ? AND move_id = ?', note, groupId, id);
   }
 }
 

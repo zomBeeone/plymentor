@@ -169,8 +169,8 @@ test('each group has its own notes: on a move two groups share, a note in each; 
   assert.deepEqual(
     ['d4 d5 Nf3', 'd4 d5 Nf3 Nf6'].map(l => [entryOf(r.entries, l).notes, entryOf(r.entries, l).comment]),
     [
-      [{ [slav.id]: 'A quiet line' }, null],
-      [{ [slav.id]: 'Develop' }, null],
+      [{ [slav.id]: 'A quiet line' }, 'A quiet line'],
+      [{ [slav.id]: 'Develop' }, 'Develop'],
     ],
   );
   // out of their last group — the group deleted keeping its lines, a line taken out of a group —: their notes stay
@@ -284,7 +284,7 @@ test('the coach sees the group being drilled, the game it started with its goal,
   assert.doesNotMatch(CLI_TASKS.gameEnd({ result: '1-0, checkmate' }), /goal/);
 });
 
-test('the notes kept before each group had its own: a move in one group gives its note to that group, one in several keeps it outside them', async () => {
+test('the notes kept before each group had its own: at the update every group with the move has its note; after it, each group its own', async () => {
   const french = await handle('POST', '/api/repertoire/groups', { color: 'white', name: 'Old French' });
   const caro = await handle('POST', '/api/repertoire/groups', { color: 'white', name: 'Old Caro-Kann' });
   await add('white', 'e4 e6 d4', french.id);
@@ -306,13 +306,21 @@ test('the notes kept before each group had its own: a move in one group gives it
   };
   migrateGroupNotes();
   const want = [
-    ['e4', 'Old note on e4', {}], // (in both groups: whose it was cannot be known)
-    ['e4 e6', null, { [french.id]: 'Old note on e4 e6' }],
-    ['e4 e6 d4', null, { [french.id]: 'Old note on e4 e6 d4' }],
-    ['e4 c6', null, { [caro.id]: 'Old note on e4 c6' }],
-    ['e4 c6 d4', null, { [caro.id]: 'Old note on e4 c6 d4' }],
+    ['e4', 'Old note on e4', { [french.id]: 'Old note on e4', [caro.id]: 'Old note on e4' }], // (in both groups: in both)
+    ['e4 e6', 'Old note on e4 e6', { [french.id]: 'Old note on e4 e6' }],
+    ['e4 e6 d4', 'Old note on e4 e6 d4', { [french.id]: 'Old note on e4 e6 d4' }],
+    ['e4 c6', 'Old note on e4 c6', { [caro.id]: 'Old note on e4 c6' }],
+    ['e4 c6 d4', 'Old note on e4 c6 d4', { [caro.id]: 'Old note on e4 c6 d4' }],
   ];
   assert.deepEqual(await seen(), want);
   migrateGroupNotes();
   assert.deepEqual(await seen(), want, 'run again, nothing changes');
+  // after the update each group is its own: a group the move goes into now has none of the others' notes, and a note
+  // given to one group is that group's alone
+  const sicilian = await handle('POST', '/api/repertoire/groups', { color: 'white', name: 'Against the Sicilian' });
+  await add('white', 'e4 c5', sicilian.id);
+  await handle('POST', '/api/repertoire/import', { color: 'white', pgn: '1. e4 e6 2. d4 d5 {The French centre} *', group: french.id });
+  const r = await rep('white');
+  assert.equal(entryOf(r.entries, 'e4').notes[sicilian.id], undefined);
+  assert.deepEqual([entryOf(r.entries, 'e4 e6 d4 d5').notes, entryOf(r.entries, 'e4 e6 d4 d5').comment], [{ [french.id]: 'The French centre' }, null]);
 });
