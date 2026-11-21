@@ -4,7 +4,8 @@
 // (run / get / all / tx), as it was with node:sqlite. In Node (unit tests) the same SQLite build runs in memory.
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 
-const SCHEMA_VERSION = 1;
+// 2: a repertoire move's note belongs to its group (see migrateGroupNotes)
+const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS collections (
@@ -100,7 +101,8 @@ CREATE TABLE IF NOT EXISTS repertoire (
 CREATE INDEX IF NOT EXISTS repertoire_key ON repertoire(color, key);
 
 -- the student's groups of repertoire lines ("French", "Against the Sicilian"…); a move can be in several groups (1. e4
--- begins both the French and the Caro-Kann), and the lines in none are the repertoire's other lines
+-- begins both the French and the Caro-Kann), and the lines in none are the repertoire's other lines. A move's note
+-- belongs to the group it is in (comment here: each group its own); repertoire.comment is its note outside the groups.
 CREATE TABLE IF NOT EXISTS repertoire_groups (
   id INTEGER PRIMARY KEY,
   color TEXT NOT NULL,
@@ -111,6 +113,7 @@ CREATE TABLE IF NOT EXISTS repertoire_groups (
 CREATE TABLE IF NOT EXISTS repertoire_group_moves (
   group_id INTEGER NOT NULL REFERENCES repertoire_groups(id) ON DELETE CASCADE,
   move_id INTEGER NOT NULL REFERENCES repertoire(id) ON DELETE CASCADE,
+  comment TEXT,
   PRIMARY KEY (group_id, move_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS repertoire_group_moves_move ON repertoire_group_moves(move_id);
@@ -183,10 +186,31 @@ export async function openDatabase({ userId, memory = false, wasmUrl } = {}) {
   dropForeignSchema();
   db.exec(SCHEMA);
   const version = get('PRAGMA user_version')?.user_version || 0;
+  if (version < 2) migrateGroupNotes();
   if (version < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   // Jobs interrupted by closing the page can never finish.
   run(`UPDATE jobs SET status = 'interrupted', finished_at = ? WHERE status IN ('queued', 'running')`, now());
   return { persistent };
+}
+
+/**
+ * Version 2 (2026-11-21, the owner: "move comments for the openings are group based, not universal"): a repertoire
+ * move's note belongs to the group it is in. Before, a move had one note whatever its groups — the first PGN's, shown
+ * in every group with the move. A move in one group gives its note to that group; a move in several (1. e4 of both the
+ * French and the Caro-Kann) keeps its note outside them, as its note in no group: whose it was cannot be known, and in
+ * the other groups it was another's — importing a group's PGN again gives the group its own notes (a note is set where
+ * there is none).
+ */
+export function migrateGroupNotes() {
+  tx(() => {
+    if (!all('PRAGMA table_info(repertoire_group_moves)').some(c => c.name === 'comment')) db.exec('ALTER TABLE repertoire_group_moves ADD COLUMN comment TEXT');
+    // (no temp table: the OPFS pool has a few file handles only; run again, it changes nothing)
+    const single = 'SELECT move_id FROM repertoire_group_moves GROUP BY move_id HAVING COUNT(*) = 1';
+    db.exec(`UPDATE repertoire_group_moves SET comment = (SELECT r.comment FROM repertoire r WHERE r.id = repertoire_group_moves.move_id)
+        WHERE move_id IN (${single}) AND (comment IS NULL OR comment = '');
+      UPDATE repertoire SET comment = NULL
+        WHERE id IN (${single}) AND comment = (SELECT m.comment FROM repertoire_group_moves m WHERE m.move_id = repertoire.id);`);
+  });
 }
 
 /**

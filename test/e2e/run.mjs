@@ -593,8 +593,8 @@ async function main() {
     assert(after.main === 0 && after.moves === 24, `afterwards: ${JSON.stringify(after)}`);
   });
 
-  await step('openings: groups — a PGN into a new group with its notes read under the moves, a line added to another group, one group drilled on its own, a group deleted with its lines; no evaluation bar with Stockfish off', async () => {
-    const pgn = `[Event "French Defence"]\n\n1. e4 e6 2. d4 d5 3. Nc3 {The main line} Bb4 {The Winawer} (3... Nf6 {The Classical}) 4. e5 c5 *`;
+  await step('openings: groups — a PGN into a new group with its notes read under the moves, a line added to another group (each group with its own notes), one group drilled on its own, a group deleted with its lines; no evaluation bar with Stockfish off', async () => {
+    const pgn = `[Event "French Defence"]\n\n1. e4 {The French begins} e6 2. d4 d5 3. Nc3 {The main line} Bb4 {The Winawer} (3... Nf6 {The Classical}) 4. e5 c5 *`;
     const folder = name => `[...document.querySelectorAll('.rep-group')].find(g => g.querySelector('.rep-group-name')?.textContent.includes(${JSON.stringify(name)}))`;
     const moves = name => `(${folder(name)}?.querySelectorAll('.rep-tree .vm').length ?? -1)`;
     await go(page, '#/openings');
@@ -614,7 +614,7 @@ async function main() {
     const here = await page.eval(
       `({ marks: document.querySelectorAll('.panel.moves .movelist .cm').length, text: document.querySelector('.panel.moves .movelist').innerText, target: document.querySelector('.rep-target select')?.selectedOptions[0]?.textContent, chips: [...document.querySelectorAll('.rep-here .chip')].map(c => c.textContent) })`,
     );
-    assert(here.marks === 1 && !/main line/.test(here.text) && here.target === 'French Defence' && here.chips.join() === 'French Defence✕', `on the board: ${JSON.stringify(here)}`);
+    assert(here.marks === 2 && !/main line/.test(here.text) && here.target === 'French Defence' && here.chips.join() === 'French Defence✕', `on the board: ${JSON.stringify(here)}`);
     // another group, and a line into it
     await page.click('.rep-actions button', 'Group');
     await page.waitFor(`document.querySelector('.rep-new input')`, { what: 'the new group’s name' });
@@ -629,6 +629,10 @@ async function main() {
     await page.waitFor(`document.querySelector('.panel.moves .movelist .active')?.textContent.includes('c5')`, { what: '1. e4 c5 on the board' });
     await page.click('.rep-actions button', 'Add current line');
     await page.waitFor(`${moves('Sicilian')} === 2 && ${moves('French Defence')} === 9`, { what: 'the line in Sicilian, its 1. e4 in both groups' });
+    // each group its own notes: 1. e4's is the French Defence's — not in the Sicilian's lines, nor under them on the board
+    const tip = (name, move) => `([...${folder(name)}.querySelectorAll('.rep-tree .vm')].find(v => v.textContent.startsWith(${JSON.stringify(move)}))?.title ?? '?')`;
+    const notes = await page.eval(`({ french: ${tip('French Defence', '1. e4')}, sicilian: ${tip('Sicilian', '1. e4')}, board: document.querySelectorAll('.panel.moves .movelist .cm').length })`);
+    assert(notes.french === 'The French begins' && notes.sicilian === '' && notes.board === 0, `1. e4's notes: ${JSON.stringify(notes)}`);
     const buttonOf = (name, label) => `[...${folder(name)}.querySelectorAll('.rep-group-head button')].find(b => b.textContent.trim() === ${JSON.stringify(label)})`;
     // Learn and Drill side by side; only learned lines are drilled: nothing to drill yet
     const sideBySide = await page.eval(`(([a, b]) => Math.abs(a.top - b.top) < 2 && Math.abs(a.right - b.left) < 6)(['Learn', 'Drill'].map(l => [...${folder('French Defence')}.querySelectorAll('.rep-group-head button')].find(b => b.textContent.trim() === l).getBoundingClientRect()))`);

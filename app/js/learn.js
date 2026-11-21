@@ -52,6 +52,24 @@ export function learningLines(entries, progress, color) {
 /** The moves of some lines, each once. */
 export const movesOfLines = lines => [...new Map(lines.flatMap(l => l.moves).map(e => [e.id, e])).values()];
 
+/**
+ * A repertoire move's notes as the student reads them in `scope`. A note belongs to the group whose lines it is in
+ * (e.notes: { group id: note }; e.comment: its note outside the groups), so in a group (its id) they are the group's
+ * own; in the lines in no group (0), its note outside the groups; anywhere (null: a Learn or Drill of the whole
+ * repertoire, the board when no group is chosen), the notes of the groups it is in — each after its group's name when
+ * they differ (`groups`: [{ id, name }]) —, or, in none of them, its own. A move the group asked for does not have: as
+ * anywhere (on the board, a line of another group).
+ */
+export function notesOf(e, scope, groups = []) {
+  if (!e) return [];
+  const own = e.comment ? [e.comment] : [];
+  if (scope === 0 || !e.groups.length) return own;
+  if (scope && e.groups.includes(scope)) return e.notes?.[scope] ? [e.notes[scope]] : [];
+  const named = e.groups.map(id => ({ name: groups.find(g => g.id === id)?.name || '', text: e.notes?.[id] })).filter(n => n.text);
+  if (!named.length) return own;
+  return new Set(named.map(n => n.text)).size === 1 ? [named[0].text] : named.map(n => `${n.name}: ${n.text}`);
+}
+
 /** Of `list`, one to drill: not the line just done when another can be, among those drilled least. */
 function pick(list, last, rnd) {
   const others = list.length > 1 ? list.filter(l => l.id !== last) : list;

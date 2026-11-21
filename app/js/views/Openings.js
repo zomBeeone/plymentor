@@ -18,7 +18,7 @@ import { CoachPanel } from '../components/CoachPanel.js';
 import { useCoachScreen, coachRequest } from '../coachTerm.js';
 import { useBoardSplits, Splitter, clamp, px } from '../components/Split.js';
 import { pingSound, moveSound } from '../sound.js';
-import { learningLines, nextStep, movesOfLines, DRILLS_TO_LEARN } from '../learn.js';
+import { learningLines, nextStep, movesOfLines, notesOf, DRILLS_TO_LEARN } from '../learn.js';
 import { repKey, turnOf, playUci, INITIAL_FEN, tryPos } from '../chess.js';
 import { cls, stored, store } from '../util.js';
 import { clearParams } from '../router.js';
@@ -56,15 +56,24 @@ function stopAnim() {
   anim = null;
 }
 
-/** The note the repertoire of `color` has on the move that led to `node`. */
-function repNote(node, color) {
-  if (!node.parent) return '';
+/** A repertoire move's notes in `scope` (learn.js notesOf: a group's notes are its own), in the repertoire of `color`. */
+const repNotesOf = (e, scope, color) => notesOf(e, scope, os.groups[color]);
+
+/** The group the board's notes are read in: the one the lines go into ("Add current line … to"), else anywhere (null). */
+const boardScope = color => (os.groups[color] || []).find(g => g.id === os.target[color])?.id ?? null;
+
+/** The notes the repertoire of `color` has on the move that led to `node`, as the board shows them. */
+function repNotes(node, color) {
+  if (!node.parent) return [];
   const key = repKey(node.parent.fen);
-  return (os.entries[color] || []).find(e => e.key === key && e.uci === node.uci)?.comment || '';
+  return repNotesOf((os.entries[color] || []).find(e => e.key === key && e.uci === node.uci), boardScope(color), color);
 }
 
-/** A repertoire move's note, for its box beside the board in a Learn or a Drill; null when it has none. */
-const noteOf = e => (e.comment ? { title: `${Number(e.fen.split(' ')[5]) || 1}${turnOf(e.fen) === 'white' ? '.' : '...'} ${e.san}`, text: e.comment } : null);
+/** A repertoire move's notes in `scope` (see notesOf), for their box beside the board in a Learn or a Drill; null when it has none. */
+function noteOf(e, scope, color) {
+  const texts = repNotesOf(e, scope, color);
+  return texts.length ? { title: `${Number(e.fen.split(' ')[5]) || 1}${turnOf(e.fen) === 'white' ? '.' : '...'} ${e.san}`, texts } : null;
+}
 
 /** Leaving the screen in the middle of a line: the board goes straight to where it was heading. */
 function finishAnim() {
@@ -227,7 +236,7 @@ export function Openings({ route }) {
       drill: os.drill ? { color: os.drill.color, group: os.drill.group?.name, learn: !!os.drill.learn } : undefined,
       engine: !os.drill && engineSwitches().openings && ev?.lines?.length ? { depth: ev.depth, lines: ev.lines.map(l => ({ score: l.score, pv: (l.pv || []).slice(0, 12) })) } : undefined,
       question: os.question && repKey(os.question.fen) === repKey(at.fen) ? true : undefined,
-      comment: os.drill ? undefined : repNote(at, os.repColor) || undefined,
+      comment: os.drill ? undefined : repNotes(at, os.repColor).join(' / ') || undefined,
       commentFrom: 'repertoire',
       note: os.drill
         ? undefined
@@ -267,11 +276,9 @@ export function Openings({ route }) {
   const inRep = node.parent && (map.get(parentKey) || []).find(e => e.uci === node.uci);
   const groups = os.groups[color];
   const target = groups.find(g => g.id === os.target[color]) || null;
-  // a move's notes: the line's own (from a PGN), and the repertoire's
-  const notes = n => {
-    const note = n.parent && (map.get(repKey(n.parent.fen)) || []).find(e => e.uci === n.uci)?.comment;
-    return note ? [...commentsOf(n), note] : commentsOf(n);
-  };
+  // a move's notes: the line's own (from a PGN), and the repertoire's — the group's the lines go into, when it has the move
+  const scope = boardScope(color);
+  const notes = n => [...commentsOf(n), ...(n.parent ? repNotesOf((map.get(repKey(n.parent.fen)) || []).find(e => e.uci === n.uci), scope, color) : [])];
 
   const search = async q => {
     os.query = q;
@@ -449,7 +456,7 @@ export function Openings({ route }) {
       if (kind === 'learn') {
         d.arrows = [{ orig: e.uci.slice(0, 2), dest: e.uci.slice(2, 4), brush: 'green' }];
         d.feedback = { kind: 'info', text: `Your move: ${e.san}` };
-        d.note = noteOf(e);
+        d.note = noteOf(e, d.group?.id ?? null, d.color);
       }
     } else {
       const step = l.step;
@@ -477,7 +484,7 @@ export function Openings({ route }) {
       if (kind === 'drill') d.correct++;
       if (kind === 'drill' && line.learned) post('/api/repertoire/review', { id: want.id, grade: d.firstTry ? 2 : 1 }).catch(() => {});
       d.feedback = { kind: 'good', text: `✓ ${r.node.label}` };
-      d.note = noteOf(want);
+      d.note = noteOf(want, d.group?.id ?? null, d.color);
       l.at++;
       return learnMove();
     }
@@ -654,7 +661,7 @@ export function Openings({ route }) {
     if (hit) {
       d.correct++;
       d.feedback = { kind: 'good', text: `✓ ${r.node.label}` };
-      d.note = noteOf(hit);
+      d.note = noteOf(hit, d.group?.id ?? null, d.color);
       post('/api/repertoire/review', { id: hit.id, grade: d.firstTry ? 2 : 1 }).catch(() => {});
       d.expected = null;
       drillStep();
@@ -707,7 +714,7 @@ export function Openings({ route }) {
   const moves = html`<${MoveList} tree=${ctrl.tree} current=${node} onSelect=${n => ctrl.goto(n)} comments=${notes} />`;
   const comment = html`<${MoveComment} node=${node} comments=${notes} />`; // (under the moves: the note of the move on the board)
   // (a Learn or a Drill has no move list: the note of the move given or just played, in a panel of its own)
-  const moveNote = d?.note && html`<div class="panel move-note"><${NoteBox} title=${d.note.title} texts=${[d.note.text]} /></div>`;
+  const moveNote = d?.note && html`<div class="panel move-note"><${NoteBox} title=${d.note.title} texts=${d.note.texts} /></div>`;
   const find = html`<div class="panel" style="flex:none">
     <div class="panel-head"><span class="title">Find an opening</span></div>
     <div style="padding:8px"><input type="search" style="width:100%" placeholder="Name or ECO, e.g. Najdorf, Caro-Kann Advance, D37" value=${os.query} onInput=${e => search(e.currentTarget.value)} /></div>
@@ -801,7 +808,7 @@ export function Openings({ route }) {
             />`,
           )}</div>`
         : entries.length
-          ? html`<div class="rep-tree"><${RepNode} fen=${INITIAL_FEN} map=${map} color=${color} current=${hereKey} onPick=${loadLine} path=${[]} depth=${0} /></div>`
+          ? html`<div class="rep-tree"><${RepNode} fen=${INITIAL_FEN} map=${map} color=${color} scope=${null} current=${hereKey} onPick=${loadLine} path=${[]} depth=${0} /></div>`
           : html`<div class="empty"><p>Your ${color} repertoire is empty.</p><p class="muted">Play a line on the board (or pick one from the explorer) and press <b>Add current line</b>, import a PGN, or ask the coach to propose a repertoire. Keep each opening's lines in a group of its own with <b>＋ Group</b>.</p></div>`}
     </div>
   </div>`;
@@ -951,7 +958,8 @@ function playOut(way, i) {
   a.timer = setTimeout(tick, first === 0 ? 700 : delay); // a moment on the initial position first
 }
 
-function RepNode({ fen, map, color, current, onPick, path, depth, seen = new Set() }) {
+/** A repertoire tree from `fen`; `scope`: whose notes its moves show (a group's id, 0 for the lines in no group: notesOf). */
+function RepNode({ fen, map, color, scope, current, onPick, path, depth, seen = new Set() }) {
   const k = repKey(fen);
   if (depth > 40 || seen.has(k)) return null;
   const next = new Set(seen).add(k);
@@ -964,15 +972,14 @@ function RepNode({ fen, map, color, current, onPick, path, depth, seen = new Set
     const white = turnOf(e.fen) === 'white';
     const n = Number(e.fen.split(' ')[5]) || 1;
     const label = white ? `${n}. ${e.san}` : `${n}… ${e.san}`;
-    return { e, r, p, label };
+    return { e, r, p, label, notes: repNotesOf(e, scope, color) };
   }).filter(Boolean);
   const single = parts.length === 1;
+  const below = (r, p) => html`<${RepNode} fen=${r.fen} map=${map} color=${color} scope=${scope} current=${current} onPick=${onPick} path=${p} depth=${depth + 1} seen=${next} />`;
   return html`${parts.map(
-    ({ e, r, p, label }) => html`<span>
-      <span class=${cls('vm', turnOf(e.fen) === color && 'mine', repKey(r.fen) === current && 'active')} title=${e.comment ? tooltip([e.comment]) : ''} onClick=${() => onPick(p)}>${label}${e.comment ? commentMark() : null}</span>
-      ${single
-        ? html` <${RepNode} fen=${r.fen} map=${map} color=${color} current=${current} onPick=${onPick} path=${p} depth=${depth + 1} seen=${next} />`
-        : html`<div class="branch"><${RepNode} fen=${r.fen} map=${map} color=${color} current=${current} onPick=${onPick} path=${p} depth=${depth + 1} seen=${next} /></div>`}
+    ({ e, r, p, label, notes }) => html`<span>
+      <span class=${cls('vm', turnOf(e.fen) === color && 'mine', repKey(r.fen) === current && 'active')} title=${notes.length ? tooltip(notes) : ''} onClick=${() => onPick(p)}>${label}${notes.length ? commentMark() : null}</span>
+      ${single ? html` ${below(r, p)}` : html`<div class="branch">${below(r, p)}</div>`}
     </span>`,
   )}`;
 }
@@ -1013,7 +1020,7 @@ function RepFolder({ folder: f, color, open, current, busy, renaming, onToggle, 
     </div>
     ${open &&
     (f.entries.length
-      ? html`<div class="rep-tree"><${RepNode} fen=${INITIAL_FEN} map=${byKey(f.entries)} color=${color} current=${current} onPick=${onPick} path=${[]} depth=${0} /></div>`
+      ? html`<div class="rep-tree"><${RepNode} fen=${INITIAL_FEN} map=${byKey(f.entries)} color=${color} scope=${f.id} current=${current} onPick=${onPick} path=${[]} depth=${0} /></div>`
       : html`<div class="rep-group-empty">No lines yet: choose <b>${f.name}</b> next to <b>Add current line</b> and add lines from the board, or import a PGN into it.</div>`)}
   </div>`;
 }
@@ -1054,7 +1061,7 @@ function ImportRep({ color, groups, target, onClose, onDone }) {
   };
   return html`<div class="modal-backdrop" onClick=${onClose}><div class="modal" onClick=${e => e.stopPropagation()}>
     <h2>Import a PGN into your ${color} repertoire</h2>
-    <p class="muted">All variations are imported. Comments become notes on the moves: you read them under the moves as you go through a line.</p>
+    <p class="muted">All variations are imported. Comments become notes on the moves — into a group, that group's own: you read them under the moves as you go through its lines, and in its Learn and Drill.</p>
     <textarea rows="11" style="width:100%" value=${text} onInput=${e => setText(e.currentTarget.value)} placeholder="1. e4 e5 2. Nf3 (2. Bc4) Nc6 3. Bb5 …"></textarea>
     <div class="row wrap" style="margin-top:10px">
       <label class="btn small">Open a PGN file…<input type="file" accept=".pgn,.txt" hidden onChange=${open} /></label>

@@ -1,7 +1,7 @@
 // Learning a repertoire's lines: the lines, how far each is, what comes next, and what the database keeps of it.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { linesOf, learningLines, movesOfLines, nextStep, DRILLS_TO_LEARN } from '../../app/js/learn.js';
+import { linesOf, learningLines, movesOfLines, nextStep, notesOf, DRILLS_TO_LEARN } from '../../app/js/learn.js';
 import { repKey, playUci, INITIAL_FEN } from '../../app/js/chess.js';
 import { openBackend, closeBackend } from './setup.mjs';
 import { recordLineProgress as record, repertoireProgress as progress } from '../../app/js/backend/training.js';
@@ -162,4 +162,29 @@ test('the database: gone through once and drilled right twice, a line is learned
   // the window reads it with the repertoire, and writes it through its route
   assert.deepEqual((await handle('GET', '/api/repertoire?color=black')).progress[FRENCH], { shown: 1, drilled: 2, learned: true });
   assert.equal((await handle('POST', '/api/repertoire/lines', { color: 'black', line: CARO, event: 'shown' })).shown, 1);
+});
+
+test('a move’s notes where the student reads them: a group’s own, the lines in no group’s, or anywhere', () => {
+  const groups = [
+    { id: 1, name: 'French' },
+    { id: 2, name: 'Caro-Kann' },
+  ];
+  // 1. e4 in both groups, each with its note; its note outside the groups (a line in no group goes on from it)
+  const e4 = { groups: [1, 2], notes: { 1: 'For the French', 2: 'For the Caro-Kann' }, comment: 'In no group' };
+  assert.deepEqual(notesOf(e4, 1, groups), ['For the French'], 'in a group: its own');
+  assert.deepEqual(notesOf(e4, 2, groups), ['For the Caro-Kann']);
+  assert.deepEqual(notesOf(e4, 0, groups), ['In no group'], 'in the lines in no group');
+  assert.deepEqual(notesOf(e4, null, groups), ['French: For the French', 'Caro-Kann: For the Caro-Kann'], 'anywhere: each with its group, as they differ');
+  assert.deepEqual(notesOf({ ...e4, notes: { 1: 'Same', 2: 'Same' } }, null, groups), ['Same'], 'the same note once');
+  // a group without a note on it shows none — not another group's
+  const e6 = { groups: [1, 2], notes: { 1: 'The French' }, comment: null };
+  assert.deepEqual(notesOf(e6, 2, groups), []);
+  assert.deepEqual(notesOf(e6, null, groups), ['The French']);
+  // a move the group asked for does not have (the board, a line of another group): as anywhere
+  assert.deepEqual(notesOf({ groups: [2], notes: { 2: 'Caro' }, comment: null }, 1, groups), ['Caro']);
+  // in no group: its own note wherever it is read; nothing for no move
+  const lone = { groups: [], notes: {}, comment: 'Mine' };
+  assert.deepEqual([1, 0, null].map(s => notesOf(lone, s, groups)), [['Mine'], ['Mine'], ['Mine']]);
+  assert.deepEqual(notesOf({ groups: [1], notes: {}, comment: 'Kept outside' }, null, groups), ['Kept outside'], 'anywhere: its own when its groups have none');
+  assert.deepEqual(notesOf(undefined, 1, groups), []);
 });

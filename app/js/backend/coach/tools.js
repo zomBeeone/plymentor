@@ -26,6 +26,7 @@ import {
   deleteRepertoireGroup,
   removeFromRepertoireGroup,
   otherRepertoireMoves,
+  groupMoves,
 } from '../training.js';
 import { createReport } from '../reports.js';
 import { describeAppState, ENGINE_SCREENS } from './state.js';
@@ -614,7 +615,8 @@ const executors = {
       if (truncated) L.push(`(and more lines: only the first ${lines.length} are listed)`);
     };
     const counts = g => `${g.moves} move${g.moves === 1 ? '' : 's'}, ${g.studentMoves} of them ${color}'s, ${g.due} due`;
-    const inGroup = g => entries.filter(e => e.groups.includes(g.id));
+    // (each group's lines with its own notes; the lines in no group with the moves' notes outside the groups)
+    const inGroup = g => groupMoves(entries, g.id);
     if (only) {
       L.push(`The student's ${color} repertoire, group "${only.name}" (${counts(only)}) — its lines from the initial position:`);
       list(inGroup(only));

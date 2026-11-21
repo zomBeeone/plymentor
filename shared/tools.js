@@ -315,7 +315,7 @@ export const TOOL_DEFS = [
     name: 'get_repertoire',
     readOnly: true,
     description:
-      "The student's White or Black opening repertoire (the tree they drill in Openings → Repertoire): its groups — the student's folders of lines, e.g. \"French\", each drilled on its own or with the rest —, every line from the initial position (group by group, then the lines in no group) with the notes on its moves, and how many of their moves are due for review. Read it before you suggest changes to it.",
+      "The student's White or Black opening repertoire (the tree they drill in Openings → Repertoire): its groups — the student's folders of lines, e.g. \"French\", each drilled on its own or with the rest —, every line from the initial position (group by group, then the lines in no group) with the notes on its moves — each group has its own notes, a move in two groups may have a note in one and not the other —, and how many of their moves are due for review. Read it before you suggest changes to it.",
     input_schema: {
       type: 'object',
       properties: {
@@ -335,7 +335,7 @@ export const TOOL_DEFS = [
       properties: {
         color: { type: 'string', enum: ['white', 'black'], description: 'Which repertoire (the side the student plays).' },
         moves: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 40 },
-        comment: { type: 'string' },
+        comment: { type: 'string', description: "A note on the line's last move, which the student reads as they learn and drill it: the group's own note with group (each group has its own notes), else the move's note in no group. A note already there stays." },
         group: { type: 'string', description: 'The group it goes into, by name (e.g. "French"); made when the student has none of that name.' },
       },
       required: ['color', 'moves'],

@@ -1,11 +1,12 @@
 // The repertoire's groups — the student's folders of lines ("French"…): made and named, lines put in with what follows
 // them and taken out, the lines in no group, deleted with their lines or keeping them, a PGN imported into a new
-// group with its comments as the moves' notes —; the coach's repertoire tools with groups; and the training games the
-// coach starts (start_training_game) and what it sees of them.
+// group with its comments as the moves' notes, each group's notes its own —; the coach's repertoire tools with groups;
+// and the training games the coach starts (start_training_game) and what it sees of them.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { openBackend, closeBackend } from './setup.mjs';
 import { handle } from '../../app/js/backend/router.js';
+import { run, migrateGroupNotes } from '../../app/js/backend/db.js';
 import { executeTool } from '../../app/js/backend/coach/tools.js';
 import { buildBoardContext } from '../../app/js/backend/coach/context.js';
 import { PLAY_LEVELS } from '../../app/js/backend/engine/pool.js';
@@ -26,6 +27,13 @@ const sans = (entries, id) =>
     .map(e => `${e.fen.split(' ')[1] === 'w' ? '' : '…'}${e.san}`)
     .sort();
 const coach = (ui = []) => (name, input) => executeTool(name, input, { emit: e => ui.push(e), screen: null });
+/** The repertoire's move that ends `line` (SAN from the initial position). */
+function entryOf(entries, line) {
+  const moves = line.split(' ');
+  const uci = playLine(INITIAL_FEN, moves).steps.at(-1).uci;
+  const key = keyAfter(moves.slice(0, -1).join(' '));
+  return entries.find(e => e.key === key && e.uci === uci);
+}
 
 let french;
 
@@ -101,19 +109,20 @@ test('a group deleted with its lines keeps the moves other lines need; or delete
   await handle('DELETE', `/api/repertoire/groups/${a.id}?keep=1`);
 });
 
-test('a PGN into a new group: every variation, its comments as notes (also before a variation), its arrows left out', async () => {
+test('a PGN into a new group: every variation, its comments as the group’s notes (also before a variation), its arrows left out', async () => {
   const pgn = `[Event "Caro-Kann: Advance"]
 
 {The Caro-Kann} 1. e4 c6 2. d4 d5 3. e5 {[%cal Ge5e6] The Advance} (3. Nc3 {The main line} dxe4) 3... Bf5 {The bishop comes out first} ( {Also good:} 3... c5 ) *`;
   const r = await handle('POST', '/api/repertoire/import', { color: 'black', pgn, groupName: 'Caro-Kann' });
   assert.deepEqual([r.added, r.moves, r.group.name], [8, 9, 'Caro-Kann'], '1. e4 was there already');
   const after = await rep('black');
-  const notes = Object.fromEntries(after.entries.filter(e => e.comment).map(e => [e.san, e.comment]));
-  assert.deepEqual(notes, { e5: 'The Advance', Nc3: 'The main line', Bf5: 'The bishop comes out first', c5: 'Also good:' });
   const g = after.groups.find(x => x.name === 'Caro-Kann');
+  const notes = Object.fromEntries(after.entries.filter(e => e.notes[g.id]).map(e => [e.san, e.notes[g.id]]));
+  assert.deepEqual(notes, { e5: 'The Advance', Nc3: 'The main line', Bf5: 'The bishop comes out first', c5: 'Also good:' });
+  assert.ok(!after.entries.some(e => e.comment), 'the group’s notes: none outside the groups');
   assert.equal(g.moves, 9);
   assert.deepEqual(sans(after.entries, 0), ['Nf3', '…c5', '…d6'], 'the Sicilian, in no group; its 1. e4 is the Caro-Kann’s too');
-  // notes already there stay; a move without one takes the new one
+  // (a PGN into no group: the moves' notes outside the groups) notes already there stay; a move without one takes the new one
   await handle('POST', '/api/repertoire/import', { color: 'black', pgn: '1. e4 {Mine} c6 {Solid} *' });
   const again = await rep('black');
   assert.deepEqual(
@@ -134,6 +143,51 @@ test('a PGN into a new group: every variation, its comments as notes (also befor
   const byName = await handle('POST', '/api/repertoire/import', { color: 'black', pgn: '1. e4 c6 2. Nf3 d5 *', groupName: 'caro-kann' });
   assert.deepEqual([byName.group.id, byName.added], [g.id, 2]);
   assert.equal((await rep('black')).groups.length, 1);
+});
+
+test('each group has its own notes: on a move two groups share, a note in each; a line takes its notes into its first group, and keeps them out of its last', async () => {
+  const qgd = (await handle('POST', '/api/repertoire/import', { color: 'black', pgn: '1. d4 {For the QGD} d5 2. c4 e6 {Declined} *', groupName: 'QGD' })).group;
+  const slav = (await handle('POST', '/api/repertoire/import', { color: 'black', pgn: '1. d4 {For the Slav} d5 {Slav} 2. c4 c6 {The Slav} *', groupName: 'Slav' })).group;
+  let r = await rep('black');
+  const d4 = entryOf(r.entries, 'd4');
+  assert.deepEqual([[...d4.groups].sort(), d4.notes[qgd.id], d4.notes[slav.id], d4.comment], [[qgd.id, slav.id].sort(), 'For the QGD', 'For the Slav', null], '1. d4: each group its own note');
+  assert.deepEqual(entryOf(r.entries, 'd4 d5').notes, { [slav.id]: 'Slav' }, 'a note one group has and the other has not');
+  // the coach reads each group's own notes, and gives one to a group
+  const t = coach();
+  assert.match((await t('get_repertoire', { color: 'black', group: 'QGD' })).content, /\n- 1\. d4 \{For the QGD\} d5 2\. c4 e6 \{Declined\}$/);
+  assert.match((await t('get_repertoire', { color: 'black', group: 'Slav' })).content, /\n- 1\. d4 \{For the Slav\} d5 \{Slav\} 2\. c4 c6 \{The Slav\}$/);
+  await t('add_to_repertoire', { color: 'black', moves: ['d4', 'd5', 'c4', 'e6', 'Nc3'], comment: 'The main line', group: 'QGD' });
+  r = await rep('black');
+  assert.deepEqual([entryOf(r.entries, 'd4 d5 c4 e6 Nc3').notes, entryOf(r.entries, 'd4 d5 c4 e6 Nc3').comment], [{ [qgd.id]: 'The main line' }, null]);
+  // a line in no group (its notes outside the groups) into its first group: its notes go with it — not into a second
+  await handle('POST', '/api/repertoire/import', { color: 'black', pgn: '1. d4 d5 2. Nf3 {A quiet line} Nf6 {Develop} *' });
+  r = await rep('black');
+  assert.deepEqual([entryOf(r.entries, 'd4 d5 Nf3').comment, entryOf(r.entries, 'd4 d5 Nf3').groups], ['A quiet line', []]);
+  await add('black', 'd4 d5 Nf3 Nf6', slav.id);
+  await add('black', 'd4 d5 Nf3 Nf6', qgd.id);
+  r = await rep('black');
+  assert.deepEqual(
+    ['d4 d5 Nf3', 'd4 d5 Nf3 Nf6'].map(l => [entryOf(r.entries, l).notes, entryOf(r.entries, l).comment]),
+    [
+      [{ [slav.id]: 'A quiet line' }, null],
+      [{ [slav.id]: 'Develop' }, null],
+    ],
+  );
+  // out of their last group — the group deleted keeping its lines, a line taken out of a group —: their notes stay
+  await handle('DELETE', `/api/repertoire/groups/${slav.id}?keep=1`);
+  r = await rep('black');
+  assert.deepEqual([entryOf(r.entries, 'd4 d5 c4 c6').groups, entryOf(r.entries, 'd4 d5 c4 c6').comment], [[], 'The Slav']);
+  assert.equal(entryOf(r.entries, 'd4').comment, null, 'still in another group: its note is that group’s');
+  await handle('POST', `/api/repertoire/groups/${qgd.id}/remove`, { key: keyAfter('d4 d5 c4'), uci: 'e7e6' });
+  r = await rep('black');
+  assert.deepEqual(
+    ['d4 d5 c4 e6', 'd4 d5 c4 e6 Nc3'].map(l => [entryOf(r.entries, l).groups, entryOf(r.entries, l).comment]),
+    [
+      [[], 'Declined'],
+      [[], 'The main line'],
+    ],
+  );
+  await handle('DELETE', `/api/repertoire/groups/${qgd.id}`);
 });
 
 test('the coach reads the groups, puts lines into them, takes them out, and makes, renames and deletes groups', async () => {
@@ -228,4 +282,37 @@ test('the coach sees the group being drilled, the game it started with its goal,
   // the end of a game it started: the result and the goal
   assert.match(CLI_TASKS.gameEnd({ result: '1-0, checkmate', goal: 'Mate with the rook' }), /^\[App\] My training game just ended \(1-0, checkmate\)\. The goal you gave me: Mate with the rook\. .*: whether I reached the goal, the turning points/);
   assert.doesNotMatch(CLI_TASKS.gameEnd({ result: '1-0, checkmate' }), /goal/);
+});
+
+test('the notes kept before each group had its own: a move in one group gives its note to that group, one in several keeps it outside them', async () => {
+  const french = await handle('POST', '/api/repertoire/groups', { color: 'white', name: 'Old French' });
+  const caro = await handle('POST', '/api/repertoire/groups', { color: 'white', name: 'Old Caro-Kann' });
+  await add('white', 'e4 e6 d4', french.id);
+  await add('white', 'e4 c6 d4', caro.id);
+  // as an older version kept them: one note per move, and groups with no notes of their own (the table as it made it)
+  const lines = ['e4', 'e4 e6', 'e4 e6 d4', 'e4 c6', 'e4 c6 d4'];
+  const before = await rep('white');
+  for (const l of lines) run('UPDATE repertoire SET comment = ? WHERE id = ?', `Old note on ${l}`, entryOf(before.entries, l).id);
+  run('CREATE TABLE old_links AS SELECT group_id, move_id FROM repertoire_group_moves');
+  run('DROP TABLE repertoire_group_moves');
+  run(
+    'CREATE TABLE repertoire_group_moves (group_id INTEGER NOT NULL REFERENCES repertoire_groups(id) ON DELETE CASCADE, move_id INTEGER NOT NULL REFERENCES repertoire(id) ON DELETE CASCADE, PRIMARY KEY (group_id, move_id)) WITHOUT ROWID',
+  );
+  run('INSERT INTO repertoire_group_moves SELECT group_id, move_id FROM old_links');
+  run('DROP TABLE old_links');
+  const seen = async () => {
+    const r = await rep('white');
+    return lines.map(l => [l, entryOf(r.entries, l).comment, entryOf(r.entries, l).notes]);
+  };
+  migrateGroupNotes();
+  const want = [
+    ['e4', 'Old note on e4', {}], // (in both groups: whose it was cannot be known)
+    ['e4 e6', null, { [french.id]: 'Old note on e4 e6' }],
+    ['e4 e6 d4', null, { [french.id]: 'Old note on e4 e6 d4' }],
+    ['e4 c6', null, { [caro.id]: 'Old note on e4 c6' }],
+    ['e4 c6 d4', null, { [caro.id]: 'Old note on e4 c6 d4' }],
+  ];
+  assert.deepEqual(await seen(), want);
+  migrateGroupNotes();
+  assert.deepEqual(await seen(), want, 'run again, nothing changes');
 });
