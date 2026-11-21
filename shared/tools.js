@@ -492,14 +492,14 @@ export const TOOL_DEFS = [
     name: 'speak',
     readOnly: true,
     description:
-      "Say something out loud to the student in the app's natural voice. Only while the student has your voice switched on: end each reply with a speak call that says the whole reply the way you would say it to them in person, however long — the app reads it like an audiobook (the student can pause it, skip and choose where to listen from). A long reply may be said in parts, one speak call after each: they are read one after the other.",
+      "Say something out loud to the student in the app's natural voice. Only while the student has your voice switched on: end each reply with a speak call that says the whole reply the way you would say it to them in person, however long — the app reads it like an audiobook (the student can pause it, skip and choose where to listen from) and plays each move it says on the student's board, from the position on it. A long reply may be said in parts, one speak call after each: they are read one after the other.",
     input_schema: {
       type: 'object',
       properties: {
         text: {
           type: 'string',
           description:
-            'What to say — all of the reply, as long as it is: plain sentences (a heading or list item may stand on a line of its own), moves in standard notation (14...Nd7, Bxe5+, O-O: the app says them in words), evaluations in words; no tables, ASCII boards, FENs, code, links or emojis.',
+            'What to say — all of the reply, as long as it is: plain sentences (a heading or list item may stand on a line of its own), moves in standard notation, each line from its move number as on the board (14...Nd7 15. f4, Bxe5+, O-O: the app says them in words and plays them on the board), evaluations in words; no tables, ASCII boards, FENs, code, links or emojis.',
         },
       },
       required: ['text'],

@@ -4,11 +4,14 @@
 // clicked or from anywhere on its slider, at 1–2×; the coach's earlier texts stay, to be heard again from where they
 // were left. A text the coach says while its text of the same turn is being read goes after it (a long reply said in
 // parts); a new turn's is read at once. The voices are voice.js's: the natural one makes the parts ahead of the one
-// being said, as for a book.
+// being said, as for a book. And as in the Book reader the board plays each move once it has been said: the moves are
+// followed from the board the student had when the coach said the text (coachMoves.js), and played on it while it still
+// shows that game; a sentence the reading goes to (clicked, a step back or on) puts the board where the text is there.
 import { useEffect, useState } from '../vendor/preact.js';
 import { state, setState, toast } from './store.js';
 import { stored, store } from './util.js';
 import { speechDoc } from './coachSpeech.js';
+import { followMoves, nodeOn } from './coachMoves.js';
 import { startReading, prepareReading, cancelReading, readAloud, stopSpeaking, pieces, langOf } from './voice.js';
 
 export const SPEEDS = [1, 1.25, 1.5, 2];
@@ -34,7 +37,9 @@ const quietHere = () => /^#\/books(?:[/?]|$)/.test(globalThis.location?.hash || 
 
 /**
  * The coach's texts and their reading. A text: speechDoc's { blocks, sentences (each with its parts: what the voice
- * says, in pieces), chars } with { id, turn, heard (its reading began), at: { s, p } (where it is: sentence, part) }.
+ * says, in pieces — [{ text, move (the move the board plays once it has been said, or null) }]), chars } with { id,
+ * turn, heard (its reading began), at: { s, p } (where it is: sentence, part), board (the screen's board, see coachSays),
+ * from ({ tree, node }: the board when the coach said it, or null) }.
  */
 export class CoachReading {
   constructor() {
@@ -61,20 +66,29 @@ export class CoachReading {
   /**
    * What the coach said: a text of its own, read now — or after the one being read when that one is the coach's last,
    * of the same turn (a long reply said in parts), or once the student goes on with it when they paused it. play
-   * false: kept and shown, not read (the Book reader). Returns the text, or null when there is nothing to say in it.
+   * false: kept and shown, not read (the Book reader). board: the screen's board the moves are played on (see
+   * coachSays). Returns the text, or null when there is nothing to say in it.
    */
-  add(raw, { play = true } = {}) {
-    const doc = speechDoc(raw);
-    // (a sentence is a part, a long one cut after a clause: no utterance of a system voice runs too long)
-    for (const s of doc.sentences) s.parts = s.said ? pieces(s.said, 220) : [];
+  add(raw, { play = true, board = null } = {}) {
+    const b = board?.() || null;
+    const from = b?.tree && b.node ? { tree: b.tree, node: b.node } : null;
+    const doc = speechDoc(raw, { follow: from && (blocks => followMoves(blocks, from)) });
+    // (a sentence's parts: each ends with a move the board plays, a long one cut after a clause — no utterance of a
+    // system voice runs too long)
+    for (const s of doc.sentences)
+      s.parts = s.spans.flatMap(sp => {
+        const texts = sp.text ? pieces(sp.text, 220) : [];
+        return texts.map((text, i) => ({ text, move: i === texts.length - 1 ? sp.move : null }));
+      });
     if (!doc.sentences.some(s => s.parts.length)) return null;
-    const t = { ...doc, id: ++ids, turn, heard: false, at: { s: 0, p: 0 } };
+    const t = { ...doc, id: ++ids, turn, heard: false, at: { s: 0, p: 0 }, board, from };
     const now = this.text;
     this.texts.push(t);
     this.trim();
     const queued = !!now && now.turn === t.turn && this.texts.indexOf(now) === this.texts.length - 2 && (this.playing || this.held);
     if (play && queued) this.emit();
-    else if (play) this.seek(this.texts.length - 1, 0, true);
+    // (read at once from the board as it is: the text's moves go on from there)
+    else if (play) this.seek(this.texts.length - 1, 0, true, { board: false });
     else if (!this.playing) {
       this.cur = this.texts.length - 1;
       this.held = false;
@@ -121,7 +135,11 @@ export class CoachReading {
   play() {
     const t = this.text;
     if (this.playing || !t) return;
-    if (!this.find(t, t.at.s, t.at.p, false)) t.at = { s: 0, p: 0 }; // (heard to its end: from its start again)
+    // (heard to its end: from its start again, the board where the text began)
+    if (!this.find(t, t.at.s, t.at.p, false)) {
+      t.at = { s: 0, p: 0 };
+      this.showAt(t, 0);
+    }
     this.playing = true;
     this.held = false;
     t.heard = true;
@@ -150,13 +168,17 @@ export class CoachReading {
     else this.play();
   }
 
-  /** Goes to sentence `s` of text `i` — and reads from there if it was reading, or `play`. */
-  seek(i, s = 0, play = this.playing) {
+  /**
+   * Goes to sentence `s` of text `i` — and reads from there if it was reading, or `play`; the board shows the position
+   * of the text there (unless `board` is false).
+   */
+  seek(i, s = 0, play = this.playing, { board = true } = {}) {
     const t = this.texts[i];
     if (!t) return;
     if (this.playing) this.halt();
     this.cur = i;
     t.at = { s: Math.max(0, Math.min(s, t.sentences.length - 1)), p: 0 };
+    if (board) this.showAt(t, t.at.s);
     if (play) return this.play();
     this.held = true;
     this.emit();
@@ -177,10 +199,36 @@ export class CoachReading {
   }
 
   /** Text `i`, where it was left (or from its start, heard to its end) — read if it was reading, or `play`. */
-  show(i, play = this.playing) {
+  show(i, play = this.playing, opts) {
     const t = this.texts[i];
     if (!t) return;
-    this.seek(i, this.find(t, t.at.s, t.at.p, false) ? t.at.s : 0, play);
+    this.seek(i, this.find(t, t.at.s, t.at.p, false) ? t.at.s : 0, play, opts);
+  }
+
+  /** The board of text `t`, while the screen's board still shows the game the coach said it on — or null. */
+  boardOf(t) {
+    const b = t?.from && t.board?.();
+    return b && b.tree === t.from.tree ? b : null;
+  }
+
+  /** The board plays `move`, which the reading of text `t` has just said. */
+  played(t, move) {
+    const b = this.boardOf(t);
+    const node = b && nodeOn(b.tree, move.line);
+    if (node) b.show(node, true);
+  }
+
+  /**
+   * The board shows the position of text `t` at its sentence `s`: after the last move of the text's line said before
+   * it (not a move named on its own, which was only shown), or where the board was when the coach said it.
+   */
+  showAt(t, s) {
+    const b = this.boardOf(t);
+    if (!b) return;
+    let line = null;
+    for (const sentence of t.sentences.slice(0, s)) for (const p of sentence.parts) if (p.move && !p.move.shown) line = p.move.line;
+    const node = line ? nodeOn(b.tree, line) : t.from.node;
+    if (node) b.show(node, false);
   }
 
   setSpeed(speed) {
@@ -210,7 +258,7 @@ export class CoachReading {
     let missing = false;
     for (let p = from, k = 0; p && k < n; p = this.after(p), k++) {
       const id = key(p);
-      const text = p.t.sentences[p.s].parts[p.p];
+      const { text } = p.t.sentences[p.s].parts[p.p];
       const have = this.audio.get(id);
       if (have && (have.speed !== this.speed || have.text !== text || (missing && !have.prepared.done))) {
         cancelReading(have.prepared);
@@ -288,7 +336,7 @@ export class CoachReading {
       this.audio.delete(key(here));
       const next = this.after(here);
       if (next) this.prefetch(next);
-      const text = here.t.sentences[here.s].parts[here.p];
+      const { text, move } = here.t.sentences[here.s].parts[here.p];
       try {
         await readAloud(text, { reading, speed: this.speed, lang: lang(), prepared: made?.text === text ? made.prepared : null, pause: first ? 0 : here.p === 0 ? 0.35 : 0.15 });
         first = false;
@@ -310,6 +358,8 @@ export class CoachReading {
         break;
       }
       if (run !== this.run || !this.playing) break;
+      // (said: the board plays its move)
+      if (move) this.played(here.t, move);
       here.t.at = { s: here.s, p: here.p + 1 };
     }
     if (run === this.run && !this.playing) speaking(false);
@@ -344,15 +394,19 @@ function unlock() {
   const b = blocked;
   blocked = null;
   const i = b ? coachReading.texts.indexOf(b.t) : -1;
-  if (i >= 0 && Date.now() - b.at < 90_000 && state.settings?.voice?.enabled && !quietHere() && !coachReading.playing) setTimeout(() => coachReading.show(i, true), 0);
+  if (i >= 0 && Date.now() - b.at < 90_000 && state.settings?.voice?.enabled && !quietHere() && !coachReading.playing) setTimeout(() => coachReading.show(i, true, { board: false }), 0);
 }
 
-/** The coach's speak tool: what it says is read (kept, not read, in the Book reader — or until the first click). */
-export function coachSays(ev) {
+/**
+ * The coach's speak tool: what it says is read (kept, not read, in the Book reader — or until the first click). board:
+ * the board of the screen the student is on — () => { tree, node, show(node, sound) } or null (coachTerm.js coachBoard):
+ * the moves said are played on it.
+ */
+export function coachSays(ev, board = null) {
   if (!state.settings?.voice?.enabled || !ev.text) return;
   const quiet = quietHere();
   const wait = !quiet && !mayPlay();
-  const t = coachReading.add(ev.text, { play: !quiet && !wait });
+  const t = coachReading.add(ev.text, { play: !quiet && !wait, board });
   if (!wait || !t) return;
   if (!blocked) {
     window.addEventListener('pointerdown', unlock, true);

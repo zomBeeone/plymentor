@@ -17,7 +17,7 @@ import { useCoachHandle } from '../components/coachHandle.js';
 import { CoachPanel } from '../components/CoachPanel.js';
 import { useCoachScreen, coachRequest } from '../coachTerm.js';
 import { useBoardSplits, Splitter, clamp, px } from '../components/Split.js';
-import { pingSound } from '../sound.js';
+import { pingSound, moveSound } from '../sound.js';
 import { learningLines, nextStep, movesOfLines, DRILLS_TO_LEARN } from '../learn.js';
 import { repKey, turnOf, playUci, INITIAL_FEN, tryPos } from '../chess.js';
 import { cls, stored, store } from '../util.js';
@@ -245,6 +245,12 @@ export function Openings({ route }) {
       }
       setBoardFromCoach(ev);
       return true;
+    },
+    // the board the coach's voice plays the moves it says on (not in a drill, nor while the student is asked to find a
+    // move there: tests) — from where a line being played out stops
+    () => {
+      const at = anim ? anim.target : ctrl.node;
+      return os.drill || (os.question && repKey(os.question.fen) === repKey(at.fen)) ? null : { tree: ctrl.tree, node: at, show: showSaid };
     },
   );
   useEffect(() => {
@@ -910,6 +916,14 @@ function setBoardFromCoach(ev) {
   let at = tree === before ? way.indexOf(from) : -1;
   if (at < 0 && tree === before && tree.path(from).includes(target)) at = way.length - 1; // already past it: back
   playOut(way, Math.max(at, 0));
+}
+
+/** A move the coach's voice has said (sound: with the move's sound), or where its text is: a line being played out stops there. */
+function showSaid(node, withSound) {
+  stopAnim();
+  if (node === ctrl.node) return ctrl.emit();
+  ctrl.goto(node);
+  if (withSound && node.uci) moveSound(node);
 }
 
 /** Shows way[i], then plays the rest of `way` one move at a time. Any move or step of the student's stops it. */

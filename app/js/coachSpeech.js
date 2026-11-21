@@ -2,7 +2,8 @@
 // headings, list items — without their Markdown, each in sentences, with the moves found as the Book reader finds them
 // (books/text.js: move numbers, captures, checks, castling, promotions, long algebraic, figurines), and what the voice
 // says for each sentence: the moves in words ("14... knight to d7"), signs, results and evaluations in words, nothing
-// for what cannot be said (a link, a FEN, an emoji).
+// for what cannot be said (a link, a FEN, an emoji) — in parts, each ending with a move the board plays once it has
+// been said (coachMoves.js), as the Book reader's do.
 import { findMoves, findSentences, speakable } from './books/text.js';
 
 // ---------------------------------------------------------------------------------------------
@@ -113,16 +114,29 @@ const inWords = s =>
     .replace(/\s&\s/g, ' and ')
     .replace(/[*_#|~^]+/g, ' ');
 
+/** What the voice says for a piece of text: signs in words, and nothing for what cannot be said ('' when nothing is left). */
+function sayable(out) {
+  const said = speakable(inWords(out))
+    .replace(EMOJI, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/^[\s,.;:]+/, '')
+    .trim();
+  return /[\p{L}\p{N}]/u.test(said) ? said : '';
+}
+
 /**
  * What the voice says for the sentence of `text` from `start` to `end`: the moves in words (a comma between moves one
  * after the other and after such a line, a full stop after a move whose ! or ? ended the sentence), the rest in words
- * where a sign stands for them; '' when there is nothing to say.
+ * where a sign stands for them — { said ('' when there is nothing to say), spans: its parts, [{ text, move }], each
+ * ending with a move the board plays (`move`: the move, with its `line`), the last with the rest }.
  */
 function spoken(text, start, end, moves, silent) {
   const items = [
-    ...moves.filter(t => t.start >= start && t.end <= end).map(t => ({ ...t, move: true })),
+    ...moves.filter(t => t.start >= start && t.end <= end).map(t => ({ t, start: t.start, end: t.end, words: t.words, move: true })),
     ...silent.filter(r => r.start < end && r.end > start),
   ].sort((a, b) => a.start - b.start);
+  const spans = [];
   let out = '';
   let at = start;
   let lastMove = -1;
@@ -144,17 +158,18 @@ function spoken(text, start, end, moves, silent) {
       // ("after 15.f4 exf4 16.Bxf4 White's attack …": a pause after a line of moves)
       else if (run > 1 && word && !nextMove) out += ',';
       lastMove = it.end;
+      // (the board plays it once it has been said: a part ends with it)
+      if (it.t.line) {
+        spans.push({ text: sayable(out), move: it.t });
+        out = '';
+      }
     } else out += `${gap} `;
     at = Math.min(end, it.end);
   }
   out += text.slice(at, end);
-  const said = speakable(inWords(out))
-    .replace(EMOJI, '')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/\s+([,.;:!?])/g, '$1')
-    .replace(/^[\s,.;:]+/, '')
-    .trim();
-  return /[\p{L}\p{N}]/u.test(said) ? said : '';
+  const last = sayable(out);
+  if (last || !spans.length) spans.push({ text: last, move: null });
+  return { said: spans.map(s => s.text).filter(Boolean).join(' '), spans };
 }
 
 /** Where a block's moves are marked: not a square named alone ("the knight on d5"), unless it stands among moves. */
@@ -166,21 +181,27 @@ function marked(text, moves) {
 
 /**
  * What the coach said, to read: { blocks: [{ kind ('p' | 'h' | 'li'), mark, text, marks (its moves: [{ start, end }]) }],
- * sentences: [{ block, start, end (in the block's text), said (what the voice says, '' for nothing) }], chars }.
+ * sentences: [{ block, start, end (in the block's text), said (what the voice says, '' for nothing), spans (said in
+ * parts, each ending with a move the board plays: see spoken) }], chars }. `follow(blocks)`: gives the moves the board
+ * plays their `line` (coachMoves.js followMoves), each block's { text, moves, sentences } in order.
  */
-export function speechDoc(raw) {
+export function speechDoc(raw, { follow = null } = {}) {
+  const read = blocksOf(raw).map(b => {
+    const moves = findMoves(b.text);
+    return { ...b, moves, sentences: findSentences(b.text, moves) };
+  });
+  follow?.(read);
   const blocks = [];
   const sentences = [];
-  for (const b of blocksOf(raw)) {
-    const moves = findMoves(b.text);
+  for (const b of read) {
     const silent = [...b.text.matchAll(LINK), ...b.text.matchAll(FEN)].map(m => ({ start: m.index, end: m.index + m[0].length }));
-    const block = blocks.push({ kind: b.kind, mark: b.mark, text: b.text, marks: marked(b.text, moves) }) - 1;
-    for (const s of findSentences(b.text, moves)) {
+    const block = blocks.push({ kind: b.kind, mark: b.mark, text: b.text, marks: marked(b.text, b.moves) }) - 1;
+    for (const s of b.sentences) {
       let start = s.start;
       let end = s.end;
       while (start < end && /\s/.test(b.text[start])) start++;
       while (end > start && /\s/.test(b.text[end - 1])) end--;
-      if (start < end) sentences.push({ block, start, end, said: spoken(b.text, start, end, moves, silent) });
+      if (start < end) sentences.push({ block, start, end, ...spoken(b.text, start, end, b.moves, silent) });
     }
   }
   return { blocks, sentences, chars: blocks.reduce((n, b) => n + b.text.length, 0) };

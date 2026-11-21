@@ -297,11 +297,13 @@ export function hostRequest(type, data = {}, { timeout = 30_000, onEvent } = {})
 
 // The tools that change the screen run one after the other, in the order they came: a set_board (or set_engine) right
 // after (or together with) a switch_screen goes to the new screen, and a make_move plays from the position the
-// set_board before it showed.
+// set_board before it showed. What the coach says (speak) waits for the ones before it: its moves are played on the board
+// they leave (coachReading.js).
 const SCREEN_TOOLS = new Set(['switch_screen', 'set_board', 'make_move', 'open_game', 'set_engine', 'start_training_game']);
 let screenTools = Promise.resolve();
 
 function runTool(m) {
+  if (m.name === 'speak') return screenTools.then(() => execTool(m));
   if (!SCREEN_TOOLS.has(m.name)) return execTool(m);
   const run = screenTools.then(() => execTool(m));
   screenTools = run.catch(() => {});
@@ -542,12 +544,14 @@ export function compactMoveEval(m) {
 // What the coach sees, and what it can do on the screen
 
 /**
- * Registers the current screen: what the coach gets from get_board_state (getContext) and how the screen
- * handles the coach's UI actions (onUi returns true when it handled one).
+ * Registers the current screen: what the coach gets from get_board_state (getContext), how the screen handles the
+ * coach's UI actions (onUi returns true when it handled one), and the board its voice plays the moves it says on
+ * (board: () => { tree, node, show(node, sound) } — null while it may not: a training game being played, a drill, a
+ * move the student is asked to find there).
  */
-export function useCoachScreen(view, getContext, onUi) {
+export function useCoachScreen(view, getContext, onUi, board) {
   const ref = useRef(null);
-  ref.current = { view, getContext, onUi };
+  ref.current = { view, getContext, onUi, board };
   useEffect(() => {
     const entry = ref;
     screens.push(entry);
@@ -595,10 +599,24 @@ function currentScreen() {
   return { view: typeof top.view === 'function' ? top.view() : top.view, context, engines };
 }
 
+/**
+ * The board of the screen the student is on, which the coach's voice plays the moves it says on (see useCoachScreen),
+ * or null. A move played there is the coach's own change of the board: nothing to tell it until it looks again.
+ */
+export function coachBoard() {
+  let b = null;
+  try {
+    b = screens.at(-1)?.current?.board?.() || null;
+  } catch (e) {
+    console.error('coach board failed', e);
+  }
+  return b && { tree: b.tree, node: b.node, show: (node, sound) => (forgetLooks(), b.show(node, sound)) };
+}
+
 /** UI actions of the coach's tools (pushed by the backend worker on the 'coach-ui' topic). */
 export function onCoachUi(ev) {
   if (!ev || ev.type !== 'ui') return;
-  if (ev.action === 'speak') return coachSays(ev);
+  if (ev.action === 'speak') return coachSays(ev, coachBoard);
   if (ev.action === 'exercise_created') setState(s => ({ exercisesDue: (s.exercisesDue || 0) + 1 }));
   if (ev.action === 'report_created') toast(`Your coach added the report “${ev.title}” to the Reports screen.`, 'success', 6000);
   if (ev.action === 'set_engine') {

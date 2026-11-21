@@ -1,13 +1,13 @@
 // The coach's voice in its panel, read like a book (coachReading.js): what the coach is saying, the sentence being said
-// marked and its moves too; ▶/⏸, a sentence back or on, the speed, a slider to anywhere in the text, a click on a
-// sentence to listen from there, the coach's earlier texts (‹ ›). The text folds away to its sentence being said. Keys
-// while the panel has the focus: Space, ← →.
+// marked and its moves too — the one being said, which the board plays once it has been, most —; ▶/⏸, a sentence back
+// or on, the speed, a slider to anywhere in the text, a click on a sentence to listen from there, the coach's earlier
+// texts (‹ ›). The text folds away to its sentence being said. Keys while the panel has the focus: Space, ← →.
 import { html, useEffect, useRef, useState } from '../../vendor/preact.js';
 import { cls, stored, store } from '../util.js';
 import { useCoachReading, SPEEDS } from '../coachReading.js';
 
-/** A sentence's text, its moves marked. */
-function sentenceText(block, s) {
+/** A sentence's text, its moves marked — `now`, the move being said (a move of the text: its place), most. */
+function sentenceText(block, s, now = null) {
   const out = [];
   let at = s.start;
   for (const m of block.marks) {
@@ -15,12 +15,15 @@ function sentenceText(block, s) {
     const a = Math.max(m.start, s.start);
     const b = Math.min(m.end, s.end);
     if (a > at) out.push(block.text.slice(at, a));
-    out.push(html`<span class="cv-m">${block.text.slice(a, b)}</span>`);
+    out.push(html`<span class=${cls('cv-m', now && m.start === now.start && 'cv-now')}>${block.text.slice(a, b)}</span>`);
     at = b;
   }
   if (at < s.end) out.push(block.text.slice(at, s.end));
   return out;
 }
+
+/** The move the part being read of text `t` ends with — the board plays it once it has been said —, or null. */
+const moveSaid = (t, cur) => (cur === t.at.s ? t.sentences[cur]?.parts[t.at.p]?.move || null : null);
 
 /** The text's blocks, each sentence a span (data-s: its number) — the one being said `cur`. */
 function textOf(t, cur) {
@@ -32,7 +35,7 @@ function textOf(t, cur) {
     for (const i of sentencesOf[bi]) {
       const s = t.sentences[i];
       if (s.start > prev) kids.push(b.text.slice(prev, s.start));
-      kids.push(html`<span data-s=${i} class=${cls(i === cur && 'cv-cur', !s.parts.length && 'cv-quiet')}>${sentenceText(b, s)}</span>`);
+      kids.push(html`<span data-s=${i} class=${cls(i === cur && 'cv-cur', !s.parts.length && 'cv-quiet')}>${sentenceText(b, s, i === cur ? moveSaid(t, cur) : null)}</span>`);
       prev = s.end;
     }
     if (prev < b.text.length) kids.push(b.text.slice(prev));
@@ -123,6 +126,6 @@ export function CoachVoice() {
     </div>
     ${open
       ? html`<div class="cv-text" ref=${box} onClick=${click} onWheel=${() => (scrolled.current = Date.now())} onTouchMove=${() => (scrolled.current = Date.now())}>${textOf(t, cur)}</div>`
-      : html`<div class="cv-line ellipsis" title="Show the whole text" onClick=${() => fold(true)}>${said ? sentenceText(t.blocks[said.block], said) : t.blocks[0]?.text}</div>`}
+      : html`<div class="cv-line ellipsis" title="Show the whole text" onClick=${() => fold(true)}>${said ? sentenceText(t.blocks[said.block], said, moveSaid(t, cur)) : t.blocks[0]?.text}</div>`}
   </div>`;
 }

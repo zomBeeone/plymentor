@@ -223,6 +223,13 @@ async function handle(text) {
     say(`lesson said: ${r.isError ? `ERROR ${r.text.slice(0, 60)}` : r.text}`);
     return;
   }
+  if (/quiz me aloud/i.test(text)) {
+    // a question on the board, said aloud with the moves to choose from: they are not played (the answer given away)
+    const set = await call('set_board', { fen: '8/8/4k3/8/8/4K3/4P3/8 w - - 0 1', caption: 'The opposition', ask_move: true });
+    const r = await call('speak', { text: 'White to move: is 1. Kd4 or 1. Ke4 better? Play your answer on the board.' });
+    say(`quiz aloud: ${set.isError || r.isError ? `ERROR ${(set.isError ? set : r).text.slice(0, 60)}` : 'asked'}`);
+    return;
+  }
   if (/show the long line/i.test(text)) {
     const moves = 'e4 c5 Nf3 d6 d4 cxd4 Nxd4 Nf6 Nc3 a6 Be3 e5 Nb3 Be6 f3 Be7 Qd2 O-O O-O-O Nbd7 g4 b5 g5 b4'.split(' ');
     const r = await call('set_board', { moves_from_start: moves });

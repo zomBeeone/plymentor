@@ -42,13 +42,15 @@ const MEMORY_RULES = `# Memory
 You keep long-term notes about the student (get_player_memory / update_player_memory). They are stored on the student's computer, carry over between sessions and are shared by every coach the student uses in this app. Save what a good human coach would remember: level and rating, goals, the openings they play, recurring strengths and weaknesses (with evidence such as game ids), what you covered in lessons and how they did, how they like to be taught, agreed plans and homework. Save when you learn something that matters — a short note at a time, not after every message — and when the notes grow long or outdated, rewrite them as a clean summary with mode "replace". Never save secrets.`;
 
 // The coach's voice: the speak tool reads each reply aloud in the app, the whole of it, like an audiobook the student can
-// pause, skip through and start anywhere (app/js/coachReading.js).
+// pause, skip through and start anywhere (app/js/coachReading.js), and the board plays each move once it has been said
+// (app/js/coachMoves.js: numbered lines find their place, as in a book).
 const voiceRules = on => `# Your voice
 The app can say things out loud to the student in a natural, human-sounding voice: the speak tool. The student switches the voice on or off in the app. At the start of this session it is ${on ? 'ON' : 'OFF'}; the app tells you when they change it ("[App] I switched your voice on" / "… off").
 While the voice is on, end every reply with a speak call that says your reply the way a coach sitting next to the student would say it — all of it, however long (a lesson, a game review, a report): the app reads it like an audiobook, shows the text with the sentence it is reading, and the student can pause it, skip back and on, and click where to listen from.
 - Say the whole reply, not a summary: every explanation and every line. Leave out only what cannot be said: tables, ASCII boards, FENs, code, links and emojis.
 - Plain sentences. A heading or a list item may stand on a line of its own; no other Markdown.
 - Write moves in standard notation as in your reply (14...Nd7, 15. f4 exf4, Bxe5+, O-O, e8=Q): the app says them in words. Say evaluations in words ("White is clearly better", not "+1.4").
+- As it reads, the app plays each move you say on the student's board, from the position on their board when you call speak (show another position with set_board first). So begin each line with its move number as on the board, with the dots for Black's moves (15. f4 exf4 16. Bxf4; 14...Nd7 was better): the board then knows where it goes, back in the game too. A move named without a number (Nd5, ...c5) is shown from where your last line got to.
 - In a long reply you may call speak after each part as you go (each part of a lesson, say): the parts are read one after the other.
 While the voice is off, never call speak.`;
 

@@ -395,6 +395,8 @@ body.resizing-y { cursor: row-resize; }
 .cv-text .cv-quiet { cursor: default; }
 .cv-text .cv-cur, .cv-text .cv-cur:hover { background: rgb(230 180 60 / 0.22); color: var(--strong); box-shadow: 0 0 0 2px rgb(230 180 60 / 0.22); }
 .cv-m { color: #b8dc8a; }
+/* (the move being said, which the board plays once it has been: as the Book reader's bk-now) */
+.cv-m.cv-now { color: var(--strong); background: rgb(54 146 231 / 0.5); box-shadow: inset 0 -2px 0 #2c6ab0; border-radius: 2px; }
 .cv-line { padding: 0 12px 6px; font-size: 13px; color: var(--strong); cursor: pointer; flex: none; }
 .report-text { margin-top: 12px; padding: 18px 22px; }
 

@@ -354,9 +354,15 @@ async function main() {
     await page.waitFor(`document.querySelector('.engine .switch.on') && /depth [1-9]/.test(document.querySelector('.engine')?.innerText || '')`, { timeout: 30000, what: 'Stockfish on again' });
   });
 
-  await step('the coach’s voice: a long lesson said whole and read like a book — its moves in words, the sentence being read marked; paused, read from a sentence clicked, to its end, a sentence back', async () => {
-    // a stand-in for the system voice: nothing is said out loud, every sentence "takes" 150 ms
-    await page.eval(`(() => { window.ccSaid = []; speechSynthesis.speak = u => { window.ccSaid.push(u.text); window.ccNow = u; setTimeout(() => window.ccNow === u && u.onend?.(), 150); }; speechSynthesis.cancel = () => { const u = window.ccNow; window.ccNow = null; if (u) setTimeout(() => u.onerror?.(), 0); }; return true; })()`);
+  await step('the coach’s voice: a long lesson said whole and read like a book — its moves in words, each played on the board once it has been said, the sentence being read marked; paused, read from a sentence clicked, to its end, a sentence back', async () => {
+    // a stand-in for the system voice: nothing is said out loud, every part "takes" 150 ms; what is said and the moves the
+    // board shows (the move list's move on the board) in one log
+    await page.eval(`(() => { window.ccSaid = []; window.ccLog = []; speechSynthesis.speak = u => { window.ccSaid.push(u.text); window.ccLog.push('say ' + u.text); window.ccNow = u; setTimeout(() => window.ccNow === u && u.onend?.(), 150); }; speechSynthesis.cancel = () => { const u = window.ccNow; window.ccNow = null; if (u) setTimeout(() => u.onerror?.(), 0); }; return true; })()`);
+    await page.click('.side-col.middle .tab', 'Moves');
+    const onBoard = `document.querySelector('.side-col.middle .movelist .active span')?.textContent`;
+    assert((await page.eval(onBoard)) === 'e4', 'the board at 1. e4');
+    // (and the moves marked in the text as they are said: ccMarked)
+    await page.eval(`(() => { let at = 'e4'; window.ccMarked = []; new MutationObserver(() => { const a = ${onBoard}; if (a && a !== at) window.ccLog.push('board ' + (at = a)); const m = document.querySelector('.coach-voice .cv-now')?.textContent; if (m && window.ccMarked.at(-1) !== m) window.ccMarked.push(m); }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] }); return true; })()`);
     const said = 'window.ccSaid';
     await page.click('.term-coach .voice-toggle');
     await page.waitFor(`document.querySelector('.term-coach .voice-toggle')?.getAttribute('aria-pressed') === 'true'`, { what: 'the coach’s voice on' });
@@ -365,7 +371,25 @@ async function main() {
     await ask(page, 'Please read me a long lesson');
     await page.waitFor(`/lesson said: Said out loud in the app\\./.test(document.querySelector('.xterm-rows')?.innerText || '')`, { timeout: 20000, what: 'the lesson said whole (800 words)' });
     await page.waitFor(`document.querySelectorAll('.coach-voice [data-s]').length === 43`, { what: 'the whole lesson under the coach’s terminal' });
-    await page.waitFor(`${said}.includes('After 1. e4, c5, 2. knight to f3, d6, 3. d4, c takes d4, 4. knight takes d4, knight to f6, 5. knight to c3, a6, Black keeps every option open.')`, { what: 'its moves said in words' });
+    // its moves said in words, part by part — the Najdorf from 1. e4, the move on the board —, the board playing each
+    // once it has been said: as its part ends (the system voice goes on with the next part at once, the board drawn a
+    // moment later — never before the part after the next one)
+    await page.waitFor(`${said}.includes('Black keeps every option open.') && window.ccLog.includes('board a6')`, { what: 'its moves said in words and played' });
+    const log = await page.eval(`window.ccLog.slice(window.ccLog.indexOf('say After 1. e4'))`);
+    const najdorf = [['c5', 'c5'], ['2. knight to f3', 'Nf3'], ['d6', 'd6'], ['3. d4', 'd4'], ['c takes d4', 'cxd4'], ['4. knight takes d4', 'Nxd4'], ['knight to f6', 'Nf6'], ['5. knight to c3', 'Nc3'], ['a6', 'a6']];
+    const parts = log.filter(e => e.startsWith('say ')).slice(0, 11);
+    assert(JSON.stringify(parts) === JSON.stringify(['say After 1. e4', ...najdorf.map(([words]) => `say ${words}`), 'say Black keeps every option open.']), JSON.stringify(parts));
+    let saidSoFar = 0;
+    const played = [];
+    for (const e of log) {
+      if (e.startsWith('say ')) saidSoFar++;
+      else played.push([e.slice('board '.length), saidSoFar]);
+    }
+    // (move k is part k + 1's: on the board once k + 2 parts have begun, before the (k + 4)th)
+    assert(JSON.stringify(played.map(([san]) => san)) === JSON.stringify(najdorf.map(([, san]) => san)) && played.every(([, n], k) => n === k + 2 || n === k + 3), JSON.stringify(log));
+    assert(await page.eval(`[...document.querySelectorAll('.board-area cg-board piece.black.pawn')].some(p => p.cgKey === 'a6') && [...document.querySelectorAll('.board-area cg-board piece.white.knight')].some(p => p.cgKey === 'd4')`), 'the board at the Najdorf');
+    const marked = await page.eval('window.ccMarked.slice(0, 10)');
+    assert(JSON.stringify(marked) === JSON.stringify(['1. e4', 'c5', '2. Nf3', 'd6', '3. d4', 'cxd4', '4. Nxd4', 'Nf6', '5. Nc3', 'a6']), `the move being said marked: ${JSON.stringify(marked)}`);
     await page.waitFor(`Number(document.querySelector('.coach-voice .cv-cur')?.dataset.s) >= 3`, { what: 'the sentence being read marked, and moving on' });
     // paused: nothing more is said
     await page.click('.coach-voice .cv-play', 'Pause');
@@ -383,6 +407,14 @@ async function main() {
     await page.click('.coach-voice .cv-bar button', '⏮');
     await page.click('.coach-voice .cv-play', 'Continue');
     await page.waitFor(`${said}.length === ${n + 4} && ${said}.at(-1).startsWith('Remember the plan')`, { what: 'the last sentence again' });
+    // a question on the board said aloud: the moves it names are not played there (they would give the answer away)
+    await ask(page, 'Please quiz me aloud');
+    await page.waitFor(`${said}.includes('White to move: is 1. king to d4 or 1. king to e4 better?')`, { timeout: 15000, what: 'the question said whole' });
+    await sleep(600);
+    assert(
+      await page.eval(`[...document.querySelectorAll('.board-area cg-board piece.white.king')].some(p => p.cgKey === 'e3') && /Your turn/.test(document.querySelector('.board-area .board-banner')?.innerText || '')`),
+      'the board still at the question',
+    );
     // the voice off: the text goes from the panel (and the coach is told, before anything else is typed to it)
     await page.click('.term-coach .voice-toggle');
     await page.waitFor(`!document.querySelector('.coach-voice')`, { what: 'no text with the voice off' });

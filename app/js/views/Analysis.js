@@ -348,6 +348,20 @@ function resign() {
   if (p && !p.result) endGame(p, { result: p.color === 'white' ? '0-1' : '1-0', reason: 'resignation' });
 }
 
+/**
+ * A move the coach's voice has said (sound: with the move's sound), or where its text is: the board goes there — a
+ * finished training game becomes the analysis board, as when the coach shows a position.
+ */
+function showSaid(node, withSound) {
+  if (ui.play) {
+    ui.play.stopped = true;
+    ui.play = null;
+  }
+  if (node === ctrl.node) return ctrl.emit();
+  ctrl.goto(node);
+  if (withSound && node.uci) moveSound(node);
+}
+
 /** Leaves the training game; its moves stay on the board for analysis. */
 function closeGame({ ask = true, engineOn = false } = {}) {
   const p = ui.play;
@@ -422,7 +436,9 @@ export function Analysis({ route }) {
     [],
   );
 
-  // What the terminal coach sees (get_board_state) and what it can do here (set_board, open_game).
+  // What the terminal coach sees (get_board_state) and what it can do here (set_board, open_game) — and the board its
+  // voice plays the moves it says on: not a training game being played, nor while the student is asked to find a move
+  // there (the moves of the question would give the answer away).
   useCoachScreen(
     () => (ui.play ? 'play' : 'analysis'),
     () =>
@@ -440,6 +456,7 @@ export function Analysis({ route }) {
       } else return false;
       return true;
     },
+    () => ((ui.play && !ui.play.result) || (ui.question && repKey(ui.question.fen) === repKey(ctrl.node.fen)) ? null : { tree: ctrl.tree, node: ctrl.node, show: showSaid }),
   );
   useEffect(() => {
     const ev = takePendingUi(); // shown by the coach while another screen was open

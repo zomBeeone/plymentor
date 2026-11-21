@@ -35,6 +35,8 @@ globalThis.location = { hash: '#/books/1a2b3c' };
 const { setState } = await import('../../app/js/store.js');
 const { coachSays, coachTurn, coachReading } = await import('../../app/js/coachReading.js');
 const { speechDoc } = await import('../../app/js/coachSpeech.js');
+const { Tree } = await import('../../app/js/tree.js');
+const { sanToUci } = await import('../../app/js/chess.js');
 
 const texts = () => said.map(u => u.text);
 const flush = () => new Promise(r => setTimeout(r, 0));
@@ -196,4 +198,64 @@ test('what the coach says in one turn is read one part after the other; a new tu
   assert.equal(coachReading.playing, false);
   coachReading.show(0, true);
   assert.equal(texts().at(-1), 'Second.', 'the lesson goes on where it was left');
+});
+
+/** A screen's board (coachTerm.js coachBoard) with `sans` played: what it was made to show, in `shown` ("♪" with the move's sound). */
+function boardWith(sans) {
+  const tree = new Tree();
+  let node = tree.root;
+  for (const san of sans) node = tree.addMove(node, sanToUci(node.fen, san)).node;
+  const b = { tree, node, shown: [] };
+  b.show = (n, sound) => {
+    b.shown.push(`${sound ? '♪' : ''}${n.san || 'start'}`);
+    b.node = n;
+  };
+  return b;
+}
+
+test('the board plays each move once it has been said; a sentence gone to puts it where the text is there', async () => {
+  reset();
+  location.hash = '#/analysis';
+  const b = boardWith(['e4']);
+  coachSays({ text: 'After 1. e4 c5 2. Nf3 d6 Black is fine. White wants Nd5 later. Instead 2...Nc6 is classical.' }, () => b);
+  // each part ends with a move the board plays: said, then played
+  assert.deepEqual(texts(), ['After 1. e4']);
+  assert.deepEqual(b.shown, [], 'nothing played before it is said');
+  await next();
+  assert.deepEqual(b.shown, ['♪e4'], 'the move on the board: it stays there');
+  assert.deepEqual(texts().at(-1), 'c5');
+  await next();
+  await next();
+  await next();
+  assert.deepEqual(texts().slice(1), ['c5', '2. knight to f3', 'd6', 'Black is fine.']);
+  assert.deepEqual(b.shown, ['♪e4', '♪c5', '♪Nf3', '♪d6']);
+  assert.deepEqual(b.tree.mainline().map(n => n.san).slice(1), ['e4', 'c5', 'Nf3', 'd6'], 'the moves are on the board’s game');
+  // ("Nd5" named on its own: no knight can go there from the position the line is at — only said)
+  await next();
+  assert.deepEqual(texts().at(-1), 'White wants knight to d5 later.');
+  await next();
+  assert.deepEqual(texts().at(-1), 'Instead 2... knight to c6');
+  assert.equal(b.shown.length, 4);
+  await next();
+  assert.deepEqual(b.shown.at(-1), '♪Nc6');
+  assert.deepEqual(b.tree.path(b.node).map(n => n.san).slice(1), ['e4', 'c5', 'Nf3', 'Nc6'], 'the other move there: a variation');
+  // a sentence clicked: the board where the text is there — after the last move of its line said before it
+  coachReading.seek(coachReading.cur, 1);
+  assert.deepEqual(b.shown.at(-1), 'd6');
+  coachReading.seek(coachReading.cur, 0);
+  assert.deepEqual(b.shown.at(-1), 'e4', 'where the board was when the coach said it');
+  coachReading.pause();
+  // another game on the board: nothing played on it
+  const other = boardWith(['d4']);
+  coachTurn();
+  coachSays({ text: 'After 1. d4 d5 2. c4 the Queen’s Gambit.' }, () => other);
+  const shown = other.shown.length;
+  other.tree = new Tree();
+  await next();
+  await next();
+  assert.equal(other.shown.length, shown, 'the board shows another game now');
+  // no board (a screen without one): the sentences as they were, one part each
+  reset();
+  coachSays({ text: 'After 1. e4 c5 2. Nf3 Black is fine.' });
+  assert.deepEqual(texts(), ['After 1. e4, c5, 2. knight to f3, Black is fine.']);
 });

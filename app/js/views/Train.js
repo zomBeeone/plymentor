@@ -22,6 +22,13 @@ const lctrl = new BoardCtrl();
 const isDone = e => (e.reps > 0 || e.lapses > 0) && !!e.due && e.due > Date.now();
 const lesson = { question: null, caption: null, shapes: null, started: false, topic: null };
 
+/** A move the coach's voice has said in a lesson (sound: with the move's sound), or where its text is: the board goes there. */
+function showLessonMove(node, withSound) {
+  if (node === lctrl.node) return;
+  lctrl.goto(node);
+  if (withSound && node.uci) moveSound(node);
+}
+
 const TOPICS = [
   'Rook endgames: the Lucena and Philidor positions',
   'King and pawn endgames: opposition and key squares',
@@ -326,6 +333,8 @@ function Lessons({ route }) {
       onUi(ev);
       return true;
     },
+    // the board the coach's voice plays the moves it says on (not while the student is asked to find a move there)
+    () => (lesson.question && repKey(lesson.question.fen) === repKey(lctrl.node.fen) ? null : { tree: lctrl.tree, node: lctrl.node, show: showLessonMove }),
   );
 
   function startLesson(t) {
